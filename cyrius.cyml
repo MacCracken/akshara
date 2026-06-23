@@ -1,0 +1,33 @@
+[package]
+name = "akshara"
+version = "${file:VERSION}"
+description = "akshara — sovereign byte-level + BPE tokenizer (the text→token-id data layer), extracted from attn11"
+license = "GPL-3.0-only"
+language = "cyrius"
+cyrius = "6.2.36"
+repository = "https://github.com/MacCracken/akshara"
+
+[build]
+entry = "src/main.cyr"
+test = "src/test.cyr"
+output = "build/akshara"
+
+# `cyrius distlib` concatenates [lib].modules into dist/akshara.cyr — the bundle
+# consumers import via `[deps.akshara] modules = ["dist/akshara.cyr"]`. main.cyr is
+# excluded (it carries the smoke + the consumer-supplied IO stubs, not lib surface).
+# NOTE: tok.cyr's loader/streaming/emit fns reference consumer-supplied symbols
+# (_putc, secure_read_file, read_stdin, file_seek, file_read) left UNRESOLVED in the
+# bundle — a consumer using those paths supplies them (attn11: tensor.cyr + fileio.cyr).
+# The pure tokenizer path (corpus_set / bpe_learn / tok_encode / decode_char) needs
+# only rosnet (t_alloc / t_zero) + stdlib.
+[lib]
+modules = ["src/tok.cyr"]
+
+[deps]
+stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "bench", "math"]
+
+# t_alloc / t_zero — the typed bump-allocator the vocab / packed store / BPE tables use.
+[deps.rosnet]
+git = "https://github.com/MacCracken/rosnet"
+tag = "0.2.0"
+modules = ["dist/rosnet.cyr"]

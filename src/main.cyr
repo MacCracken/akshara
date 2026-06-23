@@ -1,0 +1,38 @@
+# akshara — smoke entry (NOT part of the [lib]; excluded from dist/akshara.cyr).
+# Exercises the PURE tokenizer path. The IO stubs below satisfy the linker for the
+# loader/streaming/emit fns a real consumer supplies (attn11: fileio.cyr/tensor.cyr);
+# the pure smoke never hits them.
+
+include "lib/rosnet.cyr"   # t_alloc / t_zero
+include "src/tok.cyr"      # the tokenizer lib (this repo's [lib] module)
+
+# consumer-supplied helpers, provided here so akshara builds standalone. In a real
+# consumer these come from its own tree (attn11: tensor.cyr `puts`/`_putc`, fileio.cyr
+# `secure_read_file`/`read_stdin`/`file_seek`). `print` + `file_read` are stdlib — not
+# stubbed. The loader/streaming paths are unreached by the pure smoke below.
+fn puts(s): i64 { var n = 0; while (load8(s + n) != 0) { n = n + 1; } print(s, n); return 0; }
+fn _putc(ch): i64 { var b[8]; store8(&b, ch); sys_write(1, &b, 1); return 0; }
+fn secure_read_file(path, buf, cap): i64 { return 0 - 1; }
+fn read_stdin(buf, cap): i64 { return 0 - 1; }
+fn file_seek(fd, off): i64 { return 0 - 1; }
+
+fn main(): i64 {
+    alloc_init();
+    # tiny corpus exercising the adaptive byte vocab + BPE + encode round-trip
+    var s = "abracadabra";
+    var text = alloc(16);
+    var i = 0;
+    while (load8(s + i) != 0) { store8(text + i, load8(s + i)); i = i + 1; }
+    var V = corpus_set(text, i);           # byte vocab + packed store
+    var Vb = bpe_learn(8);                  # learn up to 8 merges (widens g_data to u16)
+    # re-encoding the original bytes reproduces the stored corpus, bit-for-bit
+    var out = alloc(i * 2);
+    var n = tok_encode(text, i, out, 2);
+    if (n != g_datalen) { puts("akshara smoke: FAIL roundtrip len\n"); return 1; }
+    puts("akshara smoke: vocab/BPE/encode OK\n");
+    return 0;
+}
+
+var r = 0;
+r = main();
+sys_exit(r);
