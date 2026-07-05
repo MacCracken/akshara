@@ -4,6 +4,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-07-05
+
+**v1.0 — a clean freeze.** No behavior change from 0.1.0: this cut freezes
+what the shipping consumers (attn11 — the origin, 1060-suite — and tarka)
+have exercised unchanged since the 2026-06-22 extraction; the multi-consumer
+soak is the readiness evidence. One tokenizer, shared for real.
+
+### Added
+- **`docs/api.md`** — the frozen 1.x surface with contract notes: corpus +
+  vocab (`corpus_set`/`corpus_build`/loaders + `g_V`/`g_vocab`/`g_char2id`),
+  the width-generic packed store (`gd_ld`/`gd_st`/`stream_tok` +
+  `g_data`/`g_datalen`/`g_data_w`), opt-in BPE (`bpe_learn` + the `g_bpe_*`
+  state consumer checkpoints serialize), encode/decode (`tok_encode` /
+  `tok_emit` / `decode_char`). Caller-buffer/caller-guarantees: I/O stays in
+  consumer hooks, unresolved in the dist bundle by design. The tokenizer
+  `g_*` state is process-global (one corpus at a time) and freezes WITH the
+  surface — consumer checkpoints depend on it.
+
 ## [0.1.0] - 2026-06-22
 
 **Extraction from attn11 (M1).** akshara is the text → token-id data layer carved
