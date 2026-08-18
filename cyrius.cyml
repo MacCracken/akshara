@@ -29,5 +29,5 @@ stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "b
 # t_alloc / t_zero — the typed bump-allocator the vocab / packed store / BPE tables use.
 [deps.rosnet]
 git = "https://github.com/MacCracken/rosnet"
-tag = "0.2.0"
+tag = "1.1.1"
 modules = ["dist/rosnet.cyr"]

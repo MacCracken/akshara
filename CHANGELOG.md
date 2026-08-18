@@ -4,6 +4,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **`[deps.rosnet]` `0.2.0` -> `1.1.1`.** akshara shipped 1.0.1 still pinned to a pre-1.0 rosnet:
+  it sits downstream of rosnet in the release order, and 1.0.1 went out before rosnet 1.1.1 existed,
+  so the tag could not have been current at the time. Corrected now that rosnet 1.1.1 is published.
+  Verified the bump took — vendored `lib/rosnet.cyr` moved to `1.1.1`. Suite **2/2**, unchanged.
+
 ## [1.0.1] - 2026-08-17
 
 ### Changed
