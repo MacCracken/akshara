@@ -4,6 +4,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-08-18
+
 ### Changed
 
 - **`[deps.rosnet]` `0.2.0` -> `1.1.1`.** akshara shipped 1.0.1 still pinned to a pre-1.0 rosnet:
