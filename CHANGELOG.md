@@ -4,6 +4,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-08-17
+
+### Changed
+
+- **Cyrius pin `6.2.36` -> `6.5.27`** (2026-08-17, ecosystem-wide ML/AI-arc realign ahead of
+  the arc reopening). `cyrius lib sync --full` re-vendored the whole version-matched stdlib
+  snapshot, clearing the toolchain-drift and `./lib/ shadows version-pinned` warnings.
+  Suite unchanged and green at the new pin: **2/2 assertions**, identical to the pre-bump baseline.
+
 ## [1.0.0] - 2026-07-05
 
 **v1.0 — a clean freeze.** No behavior change from 0.1.0: this cut freezes

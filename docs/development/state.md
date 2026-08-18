@@ -5,13 +5,28 @@
 
 ## Version
 
-**0.1.0** — extraction from attn11 (M1), 2026-06-22. The text → token-id data
-layer carved out of attn11's `src/train.cyr` (via `src/tok.cyr`); third attn11
-extraction after `rosnet` (tensors) and `tyche` (PRNG).
+**1.0.0** — **stable, API frozen** (cut 2026-07-05). A clean freeze with no
+behavior change from 0.1.0: what the shipping consumers (attn11 — the origin,
+1066-assertion suite — and tarka) had exercised unchanged since the 2026-06-22
+extraction. One tokenizer, shared for real. Frozen 1.x surface in
+[`docs/api.md`](../api.md): corpus + vocab, the width-generic packed store, opt-in
+BPE, encode/decode. Caller-buffer / caller-guarantees; I/O stays in consumer hooks,
+unresolved in the dist bundle by design. The tokenizer `g_*` state is
+process-global (one corpus at a time) and freezes WITH the surface — consumer
+checkpoints depend on it. Prior: **0.1.0** — extraction from attn11 (M1),
+2026-06-22, the text → token-id data layer carved out of attn11's `src/train.cyr`
+(via `src/tok.cyr`); third attn11 extraction after `rosnet` (tensors) and `tyche`
+(PRNG).
+
+⚠ **No consumer has moved onto the 1.0.0 tag.** attn11, tentib, prajna and tarka
+all still declare `[deps.akshara] tag = "0.1.0"`. The freeze is real; its
+propagation is not.
 
 ## Toolchain
 
-- **Cyrius pin**: `6.2.36` (in `cyrius.cyml [package].cyrius`)
+- **Cyrius pin**: `6.5.27` (in `cyrius.cyml [package].cyrius`)
+
+**Pin bumped to `6.5.27` 2026-08-17** (ecosystem-wide ML/AI-arc realign, ahead of the arc reopening). `cyrius lib sync --full` re-vendored the whole version-matched stdlib snapshot; suite re-verified green at the new pin.
 
 ## Source
 

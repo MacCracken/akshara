@@ -4,7 +4,7 @@ version = "${file:VERSION}"
 description = "akshara — sovereign byte-level + BPE tokenizer (the text→token-id data layer), extracted from attn11"
 license = "GPL-3.0-only"
 language = "cyrius"
-cyrius = "6.2.36"
+cyrius = "6.5.27"
 repository = "https://github.com/MacCracken/akshara"
 
 [build]
