@@ -4,6 +4,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-09-11
+
+### Changed
+
+- **Toolchain `6.5.27` → `6.6.2`**, and rosnet `1.1.1` → `1.1.2`. No source change,
+  and no format drift despite the pin sitting below the 6.5.28 cyrfmt change.
+  Zero compiler rejections, zero fail-open sites, no `callptr`.
+
+
 ## [1.0.2] - 2026-08-18
 
 ### Changed
