@@ -3,48 +3,51 @@
 ## Reporting
 
 Report vulnerabilities to **cyriusmaccken@gmail.com**. Include reproduction
-steps and the akshara version from `VERSION` (currently **0.1.0**). Expect an
-initial response within one week. Coordinated disclosure is appreciated — do not
-open a public GitHub issue with exploit details.
+steps and the akshara version from `VERSION`. Expect an initial response within
+one week. Coordinated disclosure is appreciated — do not open a public GitHub
+issue with exploit details.
 
 ## Threat model
 
 akshara is a single-process, CPU-only **tokenizer library**. It has **no
-networking** and no privileged operations. It is consumed in-process by attn11
-and tarka; it does not run as a standalone service. Its only untrusted inputs
-are the **corpus bytes** a caller hands it (`corpus_set`, `corpus_load_file`,
-`corpus_load_stdin`, or a streaming token shard) and the **merge count** `K`
-passed to `bpe_learn`.
+networking**, opens **no files**, and runs **no processes**. It is consumed
+in-process (attn11, tarka, tentib, prajna); it does not run as a standalone
+service. Its untrusted inputs are:
 
-A realistic attacker is assumed able to:
+- the **corpus bytes** a caller hands it (`corpus_set`, `corpus_load_file`,
+  `corpus_load_stdin`, or a streamed token shard),
+- a **merge table** a consumer installs from a checkpoint or shard
+  (`g_bpe_base` / `g_bpe_nmerges` / `g_merges`, then `bpe_build_spans`),
+- the **arguments** of the public functions (`K`, `len`, `ow`, `id`, and the
+  `g_data_w` width).
 
-- supply build inputs (source / embedded corpus) — equivalent to code execution,
-  which akshara does not try to defend against, and/or
-- place a hostile corpus file / shard at a path the consumer opens, or pipe
-  hostile bytes to a consumer's stdin path, and/or
-- choose the BPE hyperparameter `K`.
-
-akshara *does not* defend against an attacker with arbitrary code execution in
-the host process (they own the address space), remote/network attacks (there is
-no networking), or side channels. The *meaning* of corpus content is untrusted
-by design — akshara faithfully tokenizes whatever bytes it is given.
+A realistic attacker is assumed able to place a hostile corpus file, shard or
+checkpoint where a consumer opens it, pipe hostile bytes to a consumer's stdin
+path, and choose the BPE hyperparameter `K`. akshara *does not* defend against
+an attacker with code execution in the host process, network attacks (there is
+no networking), or side channels. Corpus *content* is untrusted by design —
+akshara faithfully tokenizes whatever bytes it is given.
 
 ## Attack surfaces & mitigations
 
 | Surface | Mitigation |
 |---|---|
-| **Corpus bytes** (`corpus_set` / `corpus_load_file` / `corpus_load_stdin`) | The byte-level vocab accepts any of the 256 byte values into a fixed table; there is no parse step to overflow. Loaded corpora are size-capped to `MAX_CORPUS_BYTES` (64 MB) **before** use — the stdin path reads `cap + 1` and rejects (`0-2`) rather than silently truncating; empty / failed reads return distinct negative errors, never a crash. The packed token store (u8 / u16 / i64) is a single cap-sized allocation; indices are derived from the validated corpus length. |
-| **BPE merge learning** (`bpe_learn`) | `K` is range-checked to `[1, BPE_MAX_MERGES]` (512). Merges are minted **in order**, so every merge references only ids that already exist (`< base + m`) — a well-founded DAG by construction (no forward or cyclic references possible), which is what lets decode (`bpe_build_spans`) run as a flat span table rather than recursing. A token's byte expansion is bounded to `BPE_MAX_TOKLEN` (64): any merge that would exceed it is skipped, so there is no exponential-expansion ("decompression-bomb") path. All BPE buffers are allocated once at cap size; the learn/encode loops allocate nothing. |
-| **Streaming token shard** (`stream_tok`) | Chunk reads are clamped to `g_datalen` and the chunk cap, so a read never passes EOF; the shard size vs token-count consistency is the consumer's open-time gate (akshara holds the fd it is handed). |
-| **File / stdin I/O** | akshara does **not** open files itself — the loader, streaming, and emit paths call consumer-supplied symbols (`secure_read_file` / `read_stdin` / `file_seek` / `file_read`). Path-level hardening (`O_NOFOLLOW`, `fstat` size caps, symlink/TOCTOU handling) lives in the consumer's tree (attn11: `fileio.cyr`), **not** in this library. akshara's contribution is the in-memory byte cap and the structural merge-table guarantees above. |
+| **Corpus bytes** | The byte-level vocab accepts any of the 256 byte values into a fixed table; there is no parse step to overflow. Loaded corpora are capped at `MAX_CORPUS_BYTES` (64 MiB) **before** use — the stdin path reads `cap + 1` and rejects (-2) rather than truncating, and since 1.1.2 the file path also rejects a hook that reports more than the cap. `corpus_set` validates its arguments **before** touching any state: `len` in [1, 2^60 − 1] (so `len * width` cannot wrap) and `g_data_w` in {1, 2, 8} (an invalid width used to size the store at `len * w` and then write 8-byte tokens into it). A refusal leaves the loaded corpus intact. |
+| **BPE learning** (`bpe_learn`) | `K` is range-checked to [1, 512]. Merges are minted **in order**, so every merge references only ids that already exist — a well-founded DAG by construction, which lets decode run as a flat span table. A token's expansion is bounded by `BPE_MAX_TOKLEN` (64): a pair that would exceed it is skipped, so there is no exponential-expansion path. Since 1.1.2 a second learn over an already-merged store is refused (-4) — it used to mint ids that collided with the store's existing merged ids, corrupting the table silently. |
+| **Installed merge tables** (`bpe_build_spans`) | Since 1.1.2 the whole table is validated before any span is written — base in [1, 256], count in [0, 512], every merge `l, r < B + m`, every span ≤ 64 bytes — and a bad table returns -1 with every span unchanged. Consumers validate tables they load (attn11 checkpoint -33 … -38, shard -60 … -68); this makes akshara memory-safe even for a consumer that does not. |
+| **Encode / emit** | `tok_encode` refuses an output width other than 1 / 2 / 8, a u8 encode that would mint an id past 255 (which used to be truncated silently), and a call with no tokenizer loaded. `tok_emit` refuses an id outside the table (which used to print adjacent heap bytes). |
+| **Streaming token shard** (`stream_tok`) | Chunk reads are clamped to `g_datalen` and the chunk cap; an index outside the corpus, an unset cache, a failed seek or a short read fails loud (stderr, exit 1) instead of returning a stale token; a read interrupted by a signal is retried. Shard size vs token count is the consumer's open-time gate (akshara holds the fd it is handed). |
+| **File / stdin I/O** | akshara does **not** open files — the loader, streaming and emit paths call consumer-supplied hooks (`secure_read_file`, `read_stdin`, `file_seek`, `_putc`). Path-level hardening (`O_NOFOLLOW`, `fstat` size caps, symlink / TOCTOU handling) lives in the consumer's tree (attn11: `fileio.cyr`). |
 
-## Maturity
+Deliberately unchecked, as documented in `docs/api.md`: `gd_ld` / `gd_st`
+(index in `[0, g_datalen)`) and `decode_char` (id in `[0, 256)`) — the hot
+read paths of a training loop, whose callers hold the bounds.
 
-akshara is **0.1.0** — extracted from attn11 and validated transitively by
-attn11's full suite (1060/1060 green at extraction; the byte-identity gate). It
-has **not** had a dedicated, standalone security audit; the structural
-guarantees above are inherited from the attn11 code they were carved from, not
-from an akshara-specific review. A formal audit (`docs/audit/YYYY-MM-DD-audit.md`)
-is a v1.0 criterion (see [`docs/development/roadmap.md`](docs/development/roadmap.md)).
-Treat the merge-table and corpus-cap guarantees as load-bearing; treat the
-consumer-supplied I/O paths as out of akshara's trust boundary.
+## Audits
+
+- [`docs/audit/2026-11-09-audit.md`](docs/audit/2026-11-09-audit.md) — the 1.1.2
+  P(-1) hardening, optimization and repair sweep: findings, fixes, and what was
+  deliberately left.
+
+Before 1.1.2 akshara had no standalone audit; its guarantees were inherited
+from the attn11 code it was carved from.

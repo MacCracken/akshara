@@ -15,9 +15,10 @@ output = "build/akshara"
 # `cyrius distlib` concatenates [lib].modules into dist/akshara.cyr — the bundle
 # consumers import via `[deps.akshara] modules = ["dist/akshara.cyr"]`. main.cyr is
 # excluded (it carries the smoke + the consumer-supplied IO stubs, not lib surface).
-# NOTE: tok.cyr's loader/streaming/emit fns reference consumer-supplied symbols
-# (_putc, secure_read_file, read_stdin, file_seek, file_read) left UNRESOLVED in the
-# bundle — a consumer using those paths supplies them (attn11: tensor.cyr + fileio.cyr).
+# NOTE: tok.cyr's loader/streaming/emit fns reference four consumer-supplied hooks
+# (_putc, secure_read_file, read_stdin, file_seek) left UNRESOLVED in the bundle — a
+# consumer using those paths supplies them (attn11: tensor.cyr + fileio.cyr). Since
+# 1.1.2 the library no longer calls `puts` (fatal messages go to stderr via stdlib).
 # The pure tokenizer path (corpus_set / bpe_learn / tok_encode / decode_char) needs
 # only rosnet (t_alloc / t_zero) + stdlib.
 [lib]

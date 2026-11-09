@@ -1,16 +1,217 @@
-# akshara fuzz harness
+# akshara fuzz harness — seeded property fuzzing of the tokenizer.
+#
+# Build and run as CI does:
+#   CYRIUS_DCE=1 cyrius build tests/akshara.fcyr build/akshara-fuzz && ./build/akshara-fuzz
+# Deterministic: round r draws everything from seed r, so a failure names the
+# round that reproduces it. Exit 0 = every property held; 1 = a property failed
+# (the message names it, on stderr).
+#
+# Per round, over a random corpus (6 generators, 2..4096 bytes, store width 1 /
+# 2 / 8, K in [1, 512]):
+#   P1  bpe_learn == the 1.1.1 oracle (merge table, store, every span)
+#   P2  the learned table is well-founded and BPE_MAX_TOKLEN-bounded
+#   P3  the store decodes back to the corpus bytes
+#   P4  g_paircnt holds the exact pair counts of the final store
+#   P5  tok_encode(corpus) reproduces the store, at u16 and i64
+#   P6  tok_encode of a random probe == the oracle, at every legal width; at u8,
+#       refused exactly when the encoding needs an id past 255
+#   P7  a random (often hostile) merge table: bpe_build_spans accepts it iff it
+#       is valid, and a refusal changes no span
+#   P8  corpus_set / tok_encode / tok_emit with random, often invalid, arguments:
+#       the documented error code, and a refused corpus_set keeps the old corpus
+include "lib/rosnet.cyr"
+include "src/tok.cyr"
+include "tests/corpora.cyr"
+include "tests/hooks.cyr"
+include "tests/reference.cyr"
+include "tests/props.cyr"
 
-fn fuzz_main(data, len) {
-    if (len == 0) { return 0; }
+var g_fz_round = 0;
+
+# Report a failed property for the current round and exit 1.
+fn fz_fail(msg): i64 {
+    var b[32];
+    var v = g_fz_round; var p = 31;
+    store8(&b + p, 10);
+    if (v == 0) { p = p - 1; store8(&b + p, 48); }
+    while (v > 0) { p = p - 1; store8(&b + p, 48 + (v % 10)); v = v / 10; }
+    sys_write(2, "FUZZ FAIL: ", 11);
+    sys_write(2, msg, strlen(msg));
+    sys_write(2, " (round ", 8);
+    sys_write(2, &b + p, 31 - p);
+    sys_write(2, ")\n", 2);
+    sys_exit(1);
     return 0;
 }
 
-fn main() {
+# Fill buf[0, len) from generator g (as the suite's _gen).
+fn fz_gen(g, buf, len, seed): i64 {
+    if (g == 0) { return cp_text(buf, len, seed); }
+    if (g == 1) { return cp_bytes(buf, len, 2, seed); }
+    if (g == 2) { return cp_bytes(buf, len, 5, seed); }
+    if (g == 3) { return cp_bytes(buf, len, 256, seed); }
+    if (g == 4) { return cp_run(buf, len, 97 + (seed % 26)); }
+    return cp_all256(buf, len);
+}
+
+# 1 if the current merge table is valid (the same rule bpe_build_spans enforces,
+# computed independently).
+fn fz_table_valid(): i64 {
+    var B = g_bpe_base; var K = g_bpe_nmerges;
+    if ((B < 1) || (B > 256) || (K < 0) || (K > BPE_MAX_MERGES())) { return 0; }
+    var lens = alloc(BPE_VMAX() * 8);
+    var t = 0;
+    while (t < B) { store64(lens + t * 8, 1); t = t + 1; }
+    var m = 0;
+    while (m < K) {
+        var l = load64(g_merges + (2 * m) * 8); var r = load64(g_merges + (2 * m + 1) * 8);
+        if ((l < 0) || (r < 0) || (l >= B + m) || (r >= B + m)) { return 0; }
+        var e = load64(lens + l * 8) + load64(lens + r * 8);
+        if (e > BPE_MAX_TOKLEN()) { return 0; }
+        store64(lens + (B + m) * 8, e);
+        m = m + 1;
+    }
+    return 1;
+}
+
+# One fuzz round: draw a corpus and arguments from the round seed, check P1-P8.
+fn fz_round(buf, probe, snap, cur, sz): i64 {
+    cp_seed(g_fz_round * 7919 + 17);
+    var g = cp_below(6);
+    var len = 2 + cp_below(64);
+    if (cp_below(3) == 0) { len = 2 + cp_below(4095); }
+    var wsel = cp_below(3);
+    var w = 2;
+    if (wsel == 0) { w = 1; } elif (wsel == 2) { w = 8; }
+    var K = 1 + cp_below(64);
+    if (cp_below(4) == 0) { K = 1 + cp_below(512); }
+    var seed = cp_next();
+    fz_gen(g, buf, len, seed);
+    # P1 (leaves the library's learned tokenizer loaded)
+    if (ref_learn_matches(buf, len, w, K) != 1) { fz_fail("P1 bpe_learn differs from the 1.1.1 oracle"); }
+    if (_table_ok() != 1) { fz_fail("P2 merge table not well-founded / TOKLEN-bounded"); }
+    if (_decodes_to_text() != 1) { fz_fail("P3 store does not decode to the corpus"); }
+    if (_paircnt_exact() != 1) { fz_fail("P4 pair counts drifted from the store"); }
+    # P5
+    var o = alloc(len * 8 + 8);
+    if (tok_encode(g_text, g_textlen, o, 2) != g_datalen) { fz_fail("P5 u16 re-encode length"); }
+    var i = 0;
+    while (i < g_datalen) { if (load16(o + i * 2) != gd_ld(i)) { fz_fail("P5 u16 re-encode ids"); } i = i + 1; }
+    if (tok_encode(g_text, g_textlen, o, 8) != g_datalen) { fz_fail("P5 i64 re-encode length"); }
+    i = 0;
+    while (i < g_datalen) { if (load64(o + i * 8) != gd_ld(i)) { fz_fail("P5 i64 re-encode ids"); } i = i + 1; }
+    # P6: a probe from a different generator (holds unseen bytes and pairs)
+    var plen = 1 + cp_below(512);
+    fz_gen(cp_below(6), probe, plen, cp_next());
+    if (ref_encode_matches(probe, plen, 2) != 1) { fz_fail("P6 u16 encode differs from the oracle"); }
+    if (ref_encode_matches(probe, plen, 8) != 1) { fz_fail("P6 i64 encode differs from the oracle"); }
+    # u8 over the corpus itself: every learned merge fires on its own corpus, so
+    # it is refused exactly when the vocab passes 256 ids, else reproduces the store
+    var nc = tok_encode(g_text, g_textlen, o, 1);
+    if (g_bpe_base + g_bpe_nmerges > 256) {
+        if (nc != 0 - 1) { fz_fail("P6 u8 re-encode of a >256-id corpus not refused"); }
+    } else {
+        if (nc != g_datalen) { fz_fail("P6 u8 re-encode length"); }
+        i = 0;
+        while (i < nc) { if (load8(o + i) != gd_ld(i)) { fz_fail("P6 u8 re-encode ids"); } i = i + 1; }
+    }
+    # u8: refused iff the i64 encoding holds an id past 255; otherwise as 1.1.1
+    var hi = 0;
+    var ne = ref_tok_encode(probe, plen, o, 8);
+    i = 0;
+    while (i < ne) { if (load64(o + i * 8) > 255) { hi = 1; } i = i + 1; }
+    if (hi == 0) {
+        if (ref_encode_matches(probe, plen, 1) != 1) { fz_fail("P6 u8 encode differs from the oracle"); }
+    } elif (tok_encode(probe, plen, o, 1) != 0 - 1) { fz_fail("P6 u8 encode minting an id > 255 not refused"); }
+    # P7: perturb the table at random, then restore it
+    var B0 = g_bpe_base; var K0 = g_bpe_nmerges;
+    var save = alloc((2 * BPE_MAX_MERGES()) * 8);
+    i = 0;
+    while (i < 2 * BPE_MAX_MERGES()) { store64(save + i * 8, load64(g_merges + i * 8)); i = i + 1; }
+    _snap_spans(snap);
+    var kind = cp_below(5);
+    if (kind == 0) { g_bpe_base = cp_below(300) - 20; }
+    elif (kind == 1) { g_bpe_nmerges = cp_below(600) - 40; }
+    elif (kind == 2) {
+        if (K0 > 0) { store64(g_merges + cp_below(2 * K0) * 8, cp_below(800) - 10); }
+    } elif (kind == 3) {
+        # a random chain of self-merges: valid until a span passes 64 bytes
+        var nm = 1 + cp_below(8);
+        if (nm > BPE_MAX_MERGES()) { nm = BPE_MAX_MERGES(); }
+        store64(g_merges, 0); store64(g_merges + 8, 0);
+        var j = 1;
+        while (j < nm) {
+            store64(g_merges + (2 * j) * 8, B0 + j - 1);
+            store64(g_merges + (2 * j + 1) * 8, cp_below(B0 + j));
+            j = j + 1;
+        }
+        g_bpe_nmerges = nm;
+    } else {
+        var nr = cp_below(16);
+        g_bpe_nmerges = nr;
+        var q = 0;
+        while (q < 2 * nr) { store64(g_merges + q * 8, cp_below(B0 + 1 + q / 2)); q = q + 1; }
+    }
+    var valid = fz_table_valid();
+    var rc = bpe_build_spans();
+    if ((valid == 1) && (rc != 0)) { fz_fail("P7 a valid table was refused"); }
+    if ((valid == 0) && (rc == 0)) { fz_fail("P7 an invalid table was accepted"); }
+    if (valid == 0) {
+        _snap_spans(cur);
+        if (_bytes_eq(snap, cur, sz) != 1) { fz_fail("P7 a refused table changed a span"); }
+    }
+    g_bpe_base = B0; g_bpe_nmerges = K0;
+    i = 0;
+    while (i < 2 * BPE_MAX_MERGES()) { store64(g_merges + i * 8, load64(save + i * 8)); i = i + 1; }
+    if (bpe_build_spans() != 0) { fz_fail("P7 restoring the learned table failed"); }
+    if (_spans_eq(snap, B0 + K0) != 1) { fz_fail("P7 restored spans differ"); }
+    # P8: invalid arguments
+    var ow = cp_below(11) - 1;
+    var er = tok_encode(probe, plen, o, ow);
+    if ((ow != 1) && (ow != 2) && (ow != 8)) { if (er != 0 - 1) { fz_fail("P8 invalid ow not refused"); } }
+    var id = cp_below(1100) - 50;
+    if ((id < 0) || (id >= g_bpe_base + g_bpe_nmerges)) {
+        if (tok_emit(id) != 0 - 1) { fz_fail("P8 out-of-range tok_emit not refused"); }
+    }
+    if (tok_emit(g_bpe_base + g_bpe_nmerges) != 0 - 1) { fz_fail("P8 tok_emit(B+K) not refused"); }
+    if (tok_emit(0 - 1) != 0 - 1) { fz_fail("P8 tok_emit(-1) not refused"); }
+    var dl = g_datalen; var tx = g_text; var dp = g_data;
+    var sw = g_data_w;
+    var bw = cp_below(10) - 1;
+    var blen = cp_below(4) - 3;          # -3 .. 0: never a valid length
+    var erc = 0;
+    g_data_w = bw;
+    if ((bw != 1) && (bw != 2) && (bw != 8)) {
+        erc = corpus_set(probe, plen);
+        if (erc != 0 - 6) { fz_fail("P8 invalid g_data_w not refused (-6)"); }
+    } else {
+        erc = corpus_set(probe, blen);
+        if (erc != 0 - 5) { fz_fail("P8 len < 1 not refused (-5)"); }
+    }
+    g_data_w = sw;
+    if ((g_datalen != dl) || (g_text != tx) || (g_data != dp)) {
+        fz_fail("P8 a refused corpus_set changed the corpus");
+    }
+    return 0;
+}
+
+# Run 1500 seeded rounds; exit 0 when every property held.
+fn main(): i64 {
     alloc_init();
-    fuzz_main("test", 4);
-    println("fuzz: ok");
+    var rounds = 1500;
+    var buf = alloc(4096);
+    var probe = alloc(512);
+    var sz = BPE_VMAX() * 8 + BPE_VMAX() * BPE_MAX_TOKLEN();
+    var snap = alloc(sz);
+    var cur = alloc(sz);
+    g_fz_round = 0;
+    while (g_fz_round < rounds) {
+        fz_round(buf, probe, snap, cur, sz);
+        g_fz_round = g_fz_round + 1;
+    }
+    println("fuzz: 1500 rounds, 8 properties held");
     return 0;
 }
 
 var r = main();
-syscall(60, r);
+sys_exit(r);

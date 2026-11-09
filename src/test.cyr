@@ -3,6 +3,7 @@
 
 include "lib/syscalls.cyr"
 
+# The [build].test entry: a no-op; the suite lives in tests/akshara.tcyr.
 fn main() {
     return 0;
 }

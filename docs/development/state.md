@@ -5,11 +5,15 @@
 
 ## Version
 
-**1.1.1** (2026-11-09) — toolchain + dependency realign to the latest releases
-(cyrius 6.7.18, rosnet 1.2.2), no source change; every tokenizer value is
-byte-identical to 1.0.4 @ 6.6.20 and 1.1.0 @ 6.7.9 (see CHANGELOG). The 1.x
-surface is the one frozen at 1.0.0. Prior: **1.1.0** (2026-11-09) — onto the
-cyrius 6.7 series (6.7.9); **1.0.4** (2026-11-09) — realign to cyrius 6.6.20.
+**1.1.2** (2026-11-09) — the first P(-1) hardening, optimization and repair
+sweep ([`docs/audit/2026-11-09-audit.md`](../audit/2026-11-09-audit.md)): two
+MEDIUM and ten LOW findings fixed, `bpe_learn` 5.8–10.2× and `tok_encode`
+5.9–6.9× faster, every output on a valid input bit-identical to 1.1.1 on x86_64
+and aarch64 ([ADR 0001](../adr/0001-optimizations-preserve-tokenizer-output.md)).
+No signature changed; invalid arguments now get documented error codes. The 1.x
+surface is the one frozen at 1.0.0. Prior: **1.1.1** (2026-11-09) — realign to
+cyrius 6.7.18 / rosnet 1.2.2; **1.1.0** — onto the cyrius 6.7 series (6.7.9);
+**1.0.4** — realign to cyrius 6.6.20.
 
 **1.0.0** — **stable, API frozen** (cut 2026-07-05). A clean freeze with no
 behavior change from 0.1.0: what the shipping consumers (attn11 — the origin,
@@ -35,14 +39,15 @@ Consumers are on the 1.x line: attn11, tentib, prajna and tarka all declare
 
 ## Source
 
-- `src/tok.cyr` (`[lib]`) — the corpus + tokenizer layer: adaptive byte vocab,
-  opt-in BPE (Sennrich et al. 2016: learn / encode / decode, pure i64,
-  bit-reproducible x86_64 / aarch64), the width-generic packed token store
+- `src/tok.cyr` (`[lib]`, 666 lines) — the corpus + tokenizer layer: adaptive
+  byte vocab, opt-in BPE (Sennrich et al. 2016: learn / encode / decode, pure
+  i64, bit-reproducible x86_64 / aarch64), the width-generic packed token store
   (u8 / u16 / i64) + streaming read path, and the checkpoint-facing tokenizer
-  state. Byte-identical to attn11's proven code.
-- `dist/akshara.cyr` — the `cyrius distlib` bundle consumers import. Leaves the
-  consumer symbols `puts` / `_putc` / `secure_read_file` / `read_stdin` /
-  `file_seek` unresolved (rosnet→tyche pattern).
+  state. Outputs bit-identical to attn11's proven code (the 1.1.2 golden digests
+  pin 1.1.1's).
+- `dist/akshara.cyr` — the `cyrius distlib` bundle consumers import. Leaves four
+  consumer hooks — `_putc` / `secure_read_file` / `read_stdin` / `file_seek` —
+  unresolved (rosnet→tyche pattern); `puts` is no longer needed (1.1.2).
   Its sidecar `dist/akshara.deps` lists only the compile-verified stdlib leaves
   the bundle needs (`io`, emitted as an `include` at the bundle top); consumers
   declare any other leaf they use.
@@ -51,12 +56,19 @@ Consumers are on the 1.x line: attn11, tentib, prajna and tarka all declare
 
 ## Tests
 
-- `tests/akshara.tcyr` — primary suite (smoke + math; passes on `cyrius test`)
-- `tests/akshara.bcyr` — benchmark stub (no-op)
-- `tests/akshara.fcyr` — fuzz stub
-- Validated transitively by attn11's finite-difference suite (1060/1060 green at
-  extraction — the byte-identity gate). akshara's own richer suite is a
-  follow-on (v1.0 criterion).
+- `tests/akshara.tcyr` — **122 assertions**, ~6 s on x86_64 (~45 s under qemu
+  aarch64): 15 golden digests recorded from 1.1.1 (`tests/golden.cyr`), the
+  1.1.1 oracle (`tests/reference.cyr`: 432 learns, 111 encodes), and contract /
+  hardening tests for every public fn and error code. `cyrius coverage`: 21/21
+  of `tok.cyr`'s public fns referenced.
+- `tests/akshara.fcyr` — seeded property fuzzer: 1,500 rounds × 8 properties,
+  ~10 s. Mutation run (1.1.2): suite and fuzzer each kill 13/13 non-equivalent
+  injected bugs.
+- `tests/akshara.bcyr` — 8 hot-path benchmarks; history in `bench-history.csv`
+  (`scripts/bench-history.sh`), summary in [`docs/benchmarks.md`](../benchmarks.md).
+- Shared helpers: `tests/corpora.cyr`, `tests/hooks.cyr`, `tests/props.cyr`.
+- CI: fmt, lint (hard gate), vet, doc --check, deps --verify / --locked, suite,
+  bench, fuzz, distlib drift, and an aarch64 (cross + qemu) job.
 
 ## Dependencies
 
@@ -77,6 +89,12 @@ Transitive (via rosnet; locked in `cyrius.lock`):
   (was `include "src/tok.cyr"`); full suite green on the bundle.
 - [tarka](https://github.com/MacCracken/tarka) — intended shared consumer (one
   tokenizer behind SFT/diffusion and RL/reasoning).
+
+## Performance (1.1.2, x86_64, median of 3)
+
+`bpe_learn` K = 512: 127 ms / 64 KiB, 774 ms / 1 MiB, 45.7 s at the 64 MiB cap.
+`tok_encode`: 1.69 ms per 4 KiB prompt (512 merges); corpus rebuild 519 ms /
+1 MiB, 31.5 s at the cap. See [`docs/benchmarks.md`](../benchmarks.md).
 
 ## Next
 

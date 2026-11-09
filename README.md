@@ -29,16 +29,17 @@ SFT/diffusion training reference) and [tarka](https://github.com/MacCracken/tark
 ```toml
 [deps.akshara]
 git = "https://github.com/MacCracken/akshara"
-tag = "0.1.0"
+tag = "1.1.2"
 modules = ["dist/akshara.cyr"]
 ```
 
 then `include "lib/akshara.cyr"`. The bundle leaves a few **consumer-supplied**
 symbols unresolved (the rosnet→tyche pattern): `t_alloc` / `t_zero` come from
 [`rosnet`](https://github.com/MacCracken/rosnet); the loader / streaming / emit
-paths reference `puts` / `_putc` / `secure_read_file` / `read_stdin` / `file_seek`,
-which the consumer's own tree provides. The **pure** tokenizer path
+paths call four hooks — `_putc` / `secure_read_file` / `read_stdin` /
+`file_seek` — which the consumer's own tree provides. The **pure** tokenizer path
 (`corpus_set` / `bpe_learn` / `tok_encode` / `decode_char`) needs only rosnet + stdlib.
+The full surface, error codes included, is in [`docs/api.md`](docs/api.md).
 
 ## Build
 
@@ -47,7 +48,13 @@ cyrius deps                              # resolve stdlib + rosnet
 cyrius distlib                           # regenerate dist/akshara.cyr
 cyrius build src/main.cyr build/akshara  # pure-path smoke (vocab / BPE / encode)
 ./build/akshara
+cyrius test                              # golden digests, 1.1.1 oracle, contract tests
+CYRIUS_DCE=1 cyrius bench tests/akshara.bcyr
 ```
+
+Every output is bit-identical across releases and across x86_64 / aarch64
+([ADR 0001](docs/adr/0001-optimizations-preserve-tokenizer-output.md)); the
+latest audit is [`docs/audit/2026-11-09-audit.md`](docs/audit/2026-11-09-audit.md).
 
 ## License
 

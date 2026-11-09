@@ -1,13 +1,666 @@
-# akshara test suite
-# Stdlib auto-included via cyrius.cyml
+# akshara test suite.
+#
+# Run with `cyrius test tests` (or bare `cyrius test`). Stdlib is auto-included
+# from cyrius.cyml; rosnet supplies t_alloc / t_zero; tests/hooks.cyr supplies
+# the five consumer hooks the library leaves unresolved.
+#
+# Groups:
+#   golden    15 fixed corpora digested against akshara 1.1.1's outputs — the
+#             cross-version and (with the aarch64 CI lane) cross-target gate
+#   oracle    the optimized bpe_learn / tok_encode against the verbatim 1.1.1
+#             kernels in tests/reference.cyr, over a fixed matrix of corpora
+#   contract  every public function: values, invariants, error codes, and the
+#             1.1.2 hardening (marked "(1.1.2)")
+include "lib/rosnet.cyr"
+include "src/tok.cyr"
+include "tests/corpora.cyr"
+include "tests/hooks.cyr"
+include "tests/reference.cyr"
+include "tests/golden.cyr"
+include "tests/props.cyr"
 
-fn main() {
+# The digests tests/golden.cyr produced on akshara 1.1.1 (x86_64 and aarch64
+# agree; recorded 2026-11-09 with cyrius 6.7.18).
+fn GOLD(c): i64 {
+    if (c == 0) { return 0 - 640054594203054737; }
+    if (c == 1) { return 0 - 4942116880130347924; }
+    if (c == 2) { return 0 - 6188134141140322424; }
+    if (c == 3) { return 0 - 360144353989651862; }
+    if (c == 4) { return 0 - 4568435815474666274; }
+    if (c == 5) { return 3753924078661346640; }
+    if (c == 6) { return 6318540209761731646; }
+    if (c == 7) { return 765655930784043283; }
+    if (c == 8) { return 0 - 5378197414212132081; }
+    if (c == 9) { return 5782881399475135300; }
+    if (c == 10) { return 0 - 6066460022004151572; }
+    if (c == 11) { return 0 - 4346867354642211823; }
+    if (c == 12) { return 8299694315053452047; }
+    if (c == 13) { return 5246081117632812617; }
+    return 0 - 4562597732803674311;
+}
+
+# Golden group: all 15 cases reproduce the 1.1.1 digests.
+fn test_golden(): i64 {
+    test_group("golden: every output matches akshara 1.1.1");
+    var c = 0;
+    var bad = 0;
+    while (c < GOLD_NCASES()) {
+        if (gold_case(c) != GOLD(c)) { bad = bad + 1; }
+        c = c + 1;
+    }
+    assert_eq(bad, 0, "golden cases whose digest differs from 1.1.1");
+    return 0;
+}
+
+# ---- oracle: library vs the 1.1.1 kernels -------------------------------------
+
+# Fill buf[0, len) from generator g (0 text, 1 binary, 2 five symbols, 3 uniform,
+# 4 single-byte run, 5 all 256 values).
+fn _gen(g, buf, len, seed): i64 {
+    if (g == 0) { return cp_text(buf, len, seed); }
+    if (g == 1) { return cp_bytes(buf, len, 2, seed); }
+    if (g == 2) { return cp_bytes(buf, len, 5, seed); }
+    if (g == 3) { return cp_bytes(buf, len, 256, seed); }
+    if (g == 4) { return cp_run(buf, len, 97 + (seed % 26)); }
+    return cp_all256(buf, len);
+}
+
+# The i-th entry of a small fixed list (lengths, widths, merge counts).
+fn _len_at(i): i64 {
+    if (i == 0) { return 2; }
+    if (i == 1) { return 3; }
+    if (i == 2) { return 17; }
+    if (i == 3) { return 255; }
+    if (i == 4) { return 1000; }
+    return 4096;
+}
+fn _w_at(i): i64 {
+    if (i == 0) { return 1; }
+    if (i == 1) { return 2; }
+    return 8;
+}
+fn _k_at(i): i64 {
+    if (i == 0) { return 1; }
+    if (i == 1) { return 8; }
+    if (i == 2) { return 64; }
+    return 512;
+}
+
+# Oracle group: bpe_learn against the 1.1.1 kernel over 432 corpus / width / K combinations.
+fn test_oracle_learn(): i64 {
+    test_group("oracle: bpe_learn == 1.1.1 on a corpus matrix");
+    # 6 generators x 6 lengths x 3 store widths x 4 merge counts = 432 learns
+    var buf = alloc(4096);
+    var bad = 0; var runs = 0;
+    var g = 0;
+    while (g < 6) {
+        var li = 0;
+        while (li < 6) {
+            var len = _len_at(li);
+            var wi = 0;
+            while (wi < 3) {
+                var ki = 0;
+                while (ki < 4) {
+                    _gen(g, buf, len, 1 + 7 * g + 5 * li + 3 * wi + ki);
+                    if (ref_learn_matches(buf, len, _w_at(wi), _k_at(ki)) != 1) { bad = bad + 1; }
+                    runs = runs + 1;
+                    ki = ki + 1;
+                }
+                wi = wi + 1;
+            }
+            li = li + 1;
+        }
+        g = g + 1;
+    }
+    assert_eq(bad, 0, "bpe_learn runs that differ from the 1.1.1 oracle");
+    assert_eq(runs, 432, "oracle matrix ran");
+    return 0;
+}
+
+# Oracle group: tok_encode against the 1.1.1 kernel, BPE and byte level, every width.
+fn test_oracle_encode(): i64 {
+    test_group("oracle: tok_encode == 1.1.1");
+    var text = alloc(65536);
+    cp_text(text, 65536, 23);
+    g_data_w = 2;
+    corpus_set(text, 65536);
+    bpe_learn(512);
+    var src = alloc(8192);
+    var bad = 0;
+    var s = 0;
+    while (s < 40) {
+        var len = 1 + (s * 211) % 8192;
+        if ((s % 4) == 0) { cp_bytes(src, len, 256, s); } else { cp_text(src, len, 100 + s); }
+        if (ref_encode_matches(src, len, 2) != 1) { bad = bad + 1; }
+        if (ref_encode_matches(src, len, 8) != 1) { bad = bad + 1; }
+        s = s + 1;
+    }
+    # byte level, every width
+    g_data_w = 1;
+    corpus_set(text, 4096);
+    s = 0;
+    while (s < 10) {
+        var len2 = 1 + s * 97;
+        cp_bytes(src, len2, 256, 50 + s);
+        if (ref_encode_matches(src, len2, 1) != 1) { bad = bad + 1; }
+        if (ref_encode_matches(src, len2, 2) != 1) { bad = bad + 1; }
+        if (ref_encode_matches(src, len2, 8) != 1) { bad = bad + 1; }
+        s = s + 1;
+    }
+    # a small BPE vocab (<= 256 ids) may still encode at u8
+    g_data_w = 2;
+    corpus_set("abab abab", 9);
+    bpe_learn(3);
+    if (ref_encode_matches("ab abba", 7, 1) != 1) { bad = bad + 1; }
+    assert_eq(bad, 0, "tok_encode results that differ from the 1.1.1 oracle");
+    return 0;
+}
+
+# ---- contract tests -----------------------------------------------------------
+
+# corpus_set: vocab order, char2id, store widths, BPE reset.
+fn test_corpus_set(): i64 {
+    test_group("corpus_set: adaptive byte vocab + packed store");
+    g_data_w = 1;
+    var V = corpus_set("hello", 5);
+    assert_eq(V, 4, "V = distinct bytes");
+    assert_eq(g_corpus_vlen, 4, "g_corpus_vlen");
+    assert_eq(g_datalen, 5, "g_datalen");
+    assert_eq(g_textlen, 5, "g_textlen");
+    assert_eq(decode_char(0), 104, "first-occurrence order: h");
+    assert_eq(decode_char(1), 101, "e");
+    assert_eq(decode_char(2), 108, "l");
+    assert_eq(decode_char(3), 111, "o");
+    assert_eq(load64(g_char2id + 108 * 8), 2, "char2id[l]");
+    assert_eq(load64(g_char2id + 122 * 8), 0 - 1, "char2id[z] = -1 (absent)");
+    assert_eq(gd_ld(0) * 10000 + gd_ld(1) * 1000 + gd_ld(2) * 100 + gd_ld(3) * 10 + gd_ld(4), 1223, "ids 0 1 2 2 3");
+    assert_eq(g_bpe_on, 0, "byte level");
+    var w = 1;
+    var bad = 0;
+    while (w <= 8) {
+        g_data_w = w;
+        corpus_set("hello", 5);
+        if (gd_ld(4) != 3) { bad = bad + 1; }
+        if (gd_ld(2) != 2) { bad = bad + 1; }
+        if (w == 1) { w = 2; } elif (w == 2) { w = 8; } else { w = 9; }
+    }
+    assert_eq(bad, 0, "same ids at u8 / u16 / i64");
+    var all = alloc(512);
+    cp_all256(all, 512);
+    g_data_w = 1;
+    assert_eq(corpus_set(all, 512), 256, "all 256 byte values -> V = 256");
+    var i = 0; bad = 0;
+    while (i < 512) {
+        if (gd_ld(i) != load64(g_char2id + load8(all + i) * 8)) { bad = bad + 1; }
+        if (decode_char(gd_ld(i)) != load8(all + i)) { bad = bad + 1; }
+        i = i + 1;
+    }
+    assert_eq(bad, 0, "store and vocab agree on every byte");
+    # corpus_set resets BPE state
+    g_data_w = 2;
+    corpus_set("abab", 4);
+    bpe_learn(1);
+    assert_eq(g_bpe_on, 1, "learned");
+    corpus_set("abab", 4);
+    assert_eq(g_bpe_on + g_bpe_nmerges + g_bpe_base, 0, "corpus_set resets BPE state");
+    return 0;
+}
+
+# corpus_set refusals (-5 / -6) leave the loaded corpus intact.
+fn test_corpus_set_errors(): i64 {
+    test_group("corpus_set: errors leave the loaded corpus intact (1.1.2)");
+    g_data_w = 2;
+    corpus_set("hello", 5);
+    var t = g_text; var d = g_data; var v = g_vocab;
+    g_data_w = 4;
+    assert_eq(corpus_set("xyz", 3), 0 - 6, "g_data_w = 4 refused (-6) (1.1.2)");
+    g_data_w = 0;
+    assert_eq(corpus_set("xyz", 3), 0 - 6, "g_data_w = 0 refused (-6) (1.1.2)");
+    g_data_w = 3;
+    assert_eq(corpus_set("xyz", 3), 0 - 6, "g_data_w = 3 refused (-6) (1.1.2)");
+    g_data_w = 2;
+    assert_eq(corpus_set("x", 0), 0 - 5, "len 0 -> -5");
+    assert_eq(corpus_set("x", 0 - 3), 0 - 5, "len < 0 -> -5");
+    assert_eq(corpus_set("x", 1152921504606846976), 0 - 5, "len whose store size would wrap -> -5 (1.1.2)");
+    var same = 0;
+    if ((g_text == t) && (g_data == d)) { same = 1; }
+    if ((g_vocab != v) || (g_datalen != 5) || (g_textlen != 5) || (g_corpus_vlen != 4)) { same = 0; }
+    assert_eq(same, 1, "a refused corpus_set leaves the old corpus loaded (1.1.2)");
+    assert_eq(gd_ld(4), 3, "old store still readable (1.1.2)");
+    return 0;
+}
+
+# corpus_build / build_corpus: the embedded corpus.
+fn test_corpus_build(): i64 {
+    test_group("corpus_build / build_corpus: the embedded corpus");
+    var buf = alloc(1024);
+    var n = corpus_build(buf);
+    assert(n > 100, "non-trivial length");
+    assert_eq(load8(buf + n), 0, "NUL-terminated");
+    assert_eq(strlen(buf), n, "no embedded NUL");
+    assert_eq(load8(buf), 99, "starts with 'c'");
+    g_data_w = 1;
+    var V1 = corpus_set(buf, n);
+    var V2 = build_corpus();
+    assert_eq(V2, V1, "build_corpus == corpus_set(corpus_build)");
+    assert_eq(g_datalen, n, "build_corpus length");
+    return 0;
+}
+
+# corpus_load_file / corpus_load_stdin through the programmable hooks: every return path.
+fn test_loaders(): i64 {
+    test_group("corpus_load_file / corpus_load_stdin: every return path");
+    g_data_w = 2;
+    hk_serve("load me", 7);
+    assert_eq(corpus_load_file("x"), 7, "file: V of 'load me'");
+    assert_eq(g_datalen, 7, "file: length");
+    assert_eq(decode_char(gd_ld(6)), 101, "file: last byte e");
+    hk_serve("stdin!!", 7);
+    assert_eq(corpus_load_stdin(), 6, "stdin: V of 'stdin!!'");
+    assert_eq(g_datalen, 7, "stdin: length");
+    g_hk_rc = 0 - 13;
+    assert_eq(corpus_load_file("x"), 0 - 13, "file: hook error passed through");
+    assert_eq(corpus_load_stdin(), 0 - 13, "stdin: hook error passed through");
+    hk_serve("", 0);
+    assert_eq(corpus_load_file("x"), 0 - 3, "file: empty -> -3");
+    assert_eq(corpus_load_stdin(), 0 - 3, "stdin: empty -> -3");
+    hk_serve("abc", 3);
+    g_hk_lie = MAX_CORPUS_BYTES() + 1;
+    assert_eq(corpus_load_stdin(), 0 - 2, "stdin: over the cap -> -2");
+    assert_eq(corpus_load_file("x"), 0 - 2, "file: a hook reporting more than the cap -> -2 (1.1.2)");
+    g_hk_lie = 0;
+    return 0;
+}
+
+# gd_ld / gd_st round-trips at u8, u16 and i64.
+fn test_store(): i64 {
+    test_group("gd_ld / gd_st: width-generic packed store");
+    var buf = alloc(4096);
+    cp_bytes(buf, 1024, 256, 1);
+    var bad = 0;
+    var w = 1;
+    while (w <= 8) {
+        g_data_w = w;
+        corpus_set(buf, 1024);
+        var lim = 256;
+        if (w == 2) { lim = 65536; }
+        if (w == 8) { lim = 4611686018427387904; }
+        var i = 0;
+        while (i < 1024) { gd_st(i, (i * 7919 + 13) % lim); i = i + 1; }
+        i = 0;
+        while (i < 1024) { if (gd_ld(i) != (i * 7919 + 13) % lim) { bad = bad + 1; } i = i + 1; }
+        if (w == 1) { w = 2; } elif (w == 2) { w = 8; } else { w = 9; }
+    }
+    assert_eq(bad, 0, "store/load round-trip at u8 / u16 / i64");
+    g_data_w = 2;
+    corpus_set(buf, 1024);
+    gd_st(0, 767);
+    assert_eq(gd_ld(0), 767, "u16 holds the largest BPE id");
+    return 0;
+}
+
+# stream_tok through a memfd shard with a small cache: equals the shard, across chunk edges.
+fn test_stream(): i64 {
+    test_group("stream_tok: chunked shard reads == in-memory store");
+    var fd = sys_memfd_create("akshara-test", 0);
+    assert(fd >= 0, "memfd");
+    if (fd < 0) { return 0; }
+    var N = 1000; var doff = 24;
+    var img = alloc(doff + N * 2);
+    var i = 0;
+    while (i < doff) { store8(img + i, 255); i = i + 1; }
+    i = 0;
+    while (i < N) { store16(img + doff + i * 2, (i * 37) % 768); i = i + 1; }
+    assert_eq(sys_write(fd, img, doff + N * 2), doff + N * 2, "shard written");
+    var sv_w = g_data_w;
+    g_stream = 1; g_stream_fd = fd; g_stream_doff = doff;
+    g_data_w = 2; g_datalen = N;
+    g_stream_cap = 64;                     # small, to cross many chunk boundaries
+    g_stream_buf = alloc(g_stream_cap * 2);
+    g_stream_lo = 0 - 1; g_stream_clen = 0;
+    var bad = 0;
+    i = 0;
+    while (i < N) { if (gd_ld(i) != (i * 37) % 768) { bad = bad + 1; } i = i + 1; }
+    i = N - 1;
+    while (i >= 0) { if (stream_tok(i) != (i * 37) % 768) { bad = bad + 1; } i = i - 3; }
+    assert_eq(bad, 0, "forward sweep and backward strides match the shard");
+    assert(g_stream_clen <= g_stream_cap, "cache never holds more than its cap");
+    assert_eq(stream_tok(N - 1), ((N - 1) * 37) % 768, "last token (short final chunk)");
+    g_stream = 0; g_stream_fd = 0 - 1;
+    g_data_w = sv_w;
+    sys_close(fd);
+    return 0;
+}
+
+# bpe_learn: overlap and tie-break semantics, MIN_FREQ and TOKLEN stops, invariants, errors.
+fn test_bpe_learn(): i64 {
+    test_group("bpe_learn: semantics, invariants, errors");
+    g_data_w = 2;
+    corpus_set("ab", 2);
+    assert_eq(bpe_learn(0), 0 - 1, "K = 0 -> -1");
+    assert_eq(bpe_learn(513), 0 - 1, "K = 513 -> -1");
+    corpus_set("a", 1);
+    assert_eq(bpe_learn(4), 0 - 2, "1-byte corpus -> -2");
+    # u8 store widened to u16
+    g_data_w = 1;
+    corpus_set("abab", 4);
+    assert_eq(bpe_learn(1), 3, "abab: B = 2 + 1 merge");
+    assert_eq(g_data_w, 2, "u8 store widened to u16");
+    assert_eq(g_datalen, 2, "abab -> 2 ids");
+    assert_eq(gd_ld(0) * 10 + gd_ld(1), 22, "abab -> [2, 2]");
+    assert_eq(load64(g_merges) * 10 + load64(g_merges + 8), 1, "merge 0 = (a, b) = (0, 1)");
+    # overlap semantics: greedy left-to-right, non-overlapping
+    g_data_w = 2;
+    corpus_set("aaa", 3);
+    bpe_learn(1);
+    assert_eq(g_datalen * 100 + gd_ld(0) * 10 + gd_ld(1), 210, "aaa -> [aa, a]");
+    corpus_set("aaaa", 4);
+    bpe_learn(1);
+    assert_eq(g_datalen * 100 + gd_ld(0) * 10 + gd_ld(1), 211, "aaaa -> [aa, aa]");
+    corpus_set("aaaaa", 5);
+    assert_eq(bpe_learn(2), 2, "aaaaa: (aa, aa) occurs once, below BPE_MIN_FREQ");
+    # tie-break: highest count, then smallest left id, then smallest right id
+    corpus_set("pqpqpq xyxyxy", 13);
+    bpe_learn(1);
+    assert_eq(load64(g_merges) * 10 + load64(g_merges + 8), 1, "tie (p,q) vs (x,y): smaller left id wins");
+    # BPE_MIN_FREQ stop
+    corpus_set("abcdef", 6);
+    assert_eq(bpe_learn(5), 6, "no pair occurs twice: 0 merges");
+    assert_eq(g_bpe_on * 10 + g_bpe_nmerges, 10, "BPE on with 0 merges");
+    # BPE_MAX_TOKLEN cap: 300 x 'a' stops at 64-byte tokens
+    var run = alloc(300);
+    cp_run(run, 300, 97);
+    corpus_set(run, 300);
+    assert_eq(bpe_learn(512), 7, "300 x a: 6 merges, up to 64-byte tokens");
+    assert_eq(g_datalen, 7, "4 x a64, a32, a8, a4");
+    var mx = 0; var t = 0;
+    while (t < 7) { if (load64(g_tok_len + t * 8) > mx) { mx = load64(g_tok_len + t * 8); } t = t + 1; }
+    assert_eq(mx, 64, "longest token is BPE_MAX_TOKLEN");
+    # invariants on realistic corpora, at u16 and i64
+    var buf = alloc(65536);
+    var bad = 0;
+    var s = 0;
+    while (s < 6) {
+        var len = 4096 * (1 + s);
+        cp_text(buf, len, 300 + s);
+        if ((s % 2) == 0) { g_data_w = 2; } else { g_data_w = 8; }
+        corpus_set(buf, len);
+        var V = bpe_learn(64 + s * 80);
+        if (V != g_bpe_base + g_bpe_nmerges) { bad = bad + 1; }
+        if (_table_ok() != 1) { bad = bad + 1; }
+        if (_decodes_to_text() != 1) { bad = bad + 1; }
+        if (_paircnt_exact() != 1) { bad = bad + 1; }
+        s = s + 1;
+    }
+    assert_eq(bad, 0, "well-founded, TOKLEN-bounded, decodes to the corpus, exact pair counts");
+    return 0;
+}
+
+# bpe_learn refusals: a second learn (-4) and an invalid width (-5) change nothing.
+fn test_bpe_learn_guards(): i64 {
+    test_group("bpe_learn: refusals (1.1.2)");
+    g_data_w = 2;
+    corpus_set("abab abab abab", 14);
+    var V = bpe_learn(3);
+    var nm = g_bpe_nmerges; var dl = g_datalen;
+    assert_eq(bpe_learn(3), 0 - 4, "a second learn without corpus_set -> -4 (1.1.2)");
+    assert_eq(g_bpe_nmerges * 1000 + g_datalen, nm * 1000 + dl, "refused learn changes nothing (1.1.2)");
+    assert_eq(_decodes_to_text(), 1, "store still decodes (1.1.2)");
+    corpus_set("abab abab abab", 14);
+    assert_eq(bpe_learn(3), V, "a fresh corpus_set allows learning again");
+    corpus_set("abab abab abab", 14);
+    g_data_w = 4;
+    assert_eq(bpe_learn(3), 0 - 5, "an invalid g_data_w -> -5 (1.1.2)");
+    g_data_w = 2;
+    return 0;
+}
+
+# bpe_build_spans: rebuilds the table; seven hostile tables and a 128-byte span refused.
+fn test_build_spans(): i64 {
+    test_group("bpe_build_spans: decode table, hostile tables refused (1.1.2)");
+    var buf = alloc(8192);
+    cp_text(buf, 8192, 77);
+    g_data_w = 2;
+    corpus_set(buf, 8192);
+    bpe_learn(40);
+    assert_eq(bpe_build_spans(), 0, "valid table -> 0");
+    assert_eq(_table_ok(), 1, "spans rebuilt correctly");
+    var sz = BPE_VMAX() * 8 + BPE_VMAX() * BPE_MAX_TOKLEN();
+    var snap = alloc(sz);
+    var cur = alloc(sz);
+    _snap_spans(snap);
+    var B = g_bpe_base; var K = g_bpe_nmerges;
+    var ml = load64(g_merges + 2 * 5 * 8);
+    var refused = 0;
+    # forward reference, negative id, right id out of range
+    store64(g_merges + 2 * 5 * 8, B + 5);
+    if (bpe_build_spans() < 0) { refused = refused + 1; }
+    store64(g_merges + 2 * 5 * 8, 0 - 1);
+    if (bpe_build_spans() < 0) { refused = refused + 1; }
+    store64(g_merges + 2 * 5 * 8, ml);
+    var mr = load64(g_merges + (2 * 5 + 1) * 8);
+    store64(g_merges + (2 * 5 + 1) * 8, 9999);
+    if (bpe_build_spans() < 0) { refused = refused + 1; }
+    store64(g_merges + (2 * 5 + 1) * 8, mr);
+    # base / count out of range
+    g_bpe_base = 0;
+    if (bpe_build_spans() < 0) { refused = refused + 1; }
+    g_bpe_base = 257;
+    if (bpe_build_spans() < 0) { refused = refused + 1; }
+    g_bpe_base = B;
+    g_bpe_nmerges = 513;
+    if (bpe_build_spans() < 0) { refused = refused + 1; }
+    g_bpe_nmerges = 0 - 1;
+    if (bpe_build_spans() < 0) { refused = refused + 1; }
+    g_bpe_nmerges = K;
+    assert_eq(refused, 7, "seven hostile tables refused (1.1.2)");
+    _snap_spans(cur);
+    assert_eq(_bytes_eq(snap, cur, sz), 1, "refusals leave every span unchanged (1.1.2)");
+    # a doubling chain overflows BPE_MAX_TOKLEN at its 7th merge (128 bytes)
+    var sv = alloc((2 * 7) * 8);
+    var i = 0;
+    while (i < 14) { store64(sv + i * 8, load64(g_merges + i * 8)); i = i + 1; }
+    store64(g_merges, 0); store64(g_merges + 8, 0);
+    i = 1;
+    while (i < 7) {
+        store64(g_merges + (2 * i) * 8, B + i - 1);
+        store64(g_merges + (2 * i + 1) * 8, B + i - 1);
+        i = i + 1;
+    }
+    g_bpe_nmerges = 7;
+    assert(bpe_build_spans() < 0, "a 128-byte span refused (1.1.2)");
+    g_bpe_nmerges = 6;
+    assert_eq(bpe_build_spans(), 0, "the 64-byte prefix of that chain is valid");
+    assert_eq(load64(g_tok_len + (B + 5) * 8), 64, "chain tail is 64 bytes");
+    i = 0;
+    while (i < 14) { store64(g_merges + i * 8, load64(sv + i * 8)); i = i + 1; }
+    g_bpe_nmerges = K;
+    assert_eq(bpe_build_spans(), 0, "original table rebuilt");
+    assert_eq(_spans_eq(snap, B + K), 1, "spans back to the learned table");
+    return 0;
+}
+
+# tok_encode: byte level, unseen bytes, and the corpus re-encode at u16 and i64.
+fn test_tok_encode(): i64 {
+    test_group("tok_encode: byte level, BPE round-trip, widths");
+    g_data_w = 1;
+    corpus_set("hello", 5);
+    var out = alloc(64 * 8);
+    assert_eq(tok_encode("hello zz", 8, out, 8), 8, "byte level: one id per byte");
+    var lo = load64(out + 3 * 8) * 1000 + load64(out + 4 * 8) * 100;
+    assert_eq(lo + load64(out + 5 * 8) * 10 + load64(out + 7 * 8), 2300, "l o, unseen -> 0");
+    assert_eq(tok_encode("hello", 0, out, 8), 0, "len 0 -> 0");
+    var buf = alloc(65536);
+    var bad = 0;
+    var s = 0;
+    while (s < 4) {
+        var len = 2048 + s * 5000;
+        cp_text(buf, len, 500 + s);
+        g_data_w = 2;
+        corpus_set(buf, len);
+        bpe_learn(100 + s * 100);
+        var o2 = alloc(len * 2);
+        var o8 = alloc(len * 8);
+        var n2 = tok_encode(g_text, g_textlen, o2, 2);
+        var n8 = tok_encode(g_text, g_textlen, o8, 8);
+        if ((n2 != g_datalen) || (n8 != g_datalen)) { bad = bad + 1; }
+        var i = 0;
+        while (i < g_datalen) {
+            if (load16(o2 + i * 2) != gd_ld(i)) { bad = bad + 1; }
+            if (load64(o8 + i * 8) != gd_ld(i)) { bad = bad + 1; }
+            i = i + 1;
+        }
+        s = s + 1;
+    }
+    assert_eq(bad, 0, "encoding the corpus bytes reproduces the store at u16 and i64");
+    return 0;
+}
+
+# tok_encode refusals: bad widths, u8 past 256 ids (with the 256 / 257 boundary), no tokenizer.
+fn test_tok_encode_guards(): i64 {
+    test_group("tok_encode: refusals (1.1.2)");
+    g_data_w = 2;
+    corpus_set("hello", 5);
+    var out = alloc(64 * 8);
+    assert_eq(tok_encode("hello", 5, out, 4), 0 - 1, "ow = 4 -> -1 (1.1.2)");
+    assert_eq(tok_encode("hello", 5, out, 0), 0 - 1, "ow = 0 -> -1 (1.1.2)");
+    assert_eq(tok_encode("hello", 5, out, 3), 0 - 1, "ow = 3 -> -1 (1.1.2)");
+    var all = alloc(512);
+    cp_all256(all, 512);
+    corpus_set(all, 512);
+    bpe_learn(8);
+    assert(g_bpe_base + g_bpe_nmerges > 256, "vocab past 256");
+    var o1 = alloc(512);
+    assert_eq(tok_encode(all, 512, o1, 1), 0 - 1, "ow = 1 with ids past 255 -> -1 (1.1.2)");
+    assert(tok_encode(all, 512, out, 8) > 0, "ow = 8 fine");
+    # the boundary: a 257-id vocab is refused at u8, a 256-id vocab is not
+    var b257 = alloc(514);
+    cp_all256(b257, 512);
+    store8(b257 + 512, load8(b257)); store8(b257 + 513, load8(b257 + 1));
+    corpus_set(b257, 514);
+    assert_eq(bpe_learn(1), 257, "256 bytes + 1 merge = 257 ids");
+    assert_eq(tok_encode(b257, 514, o1, 1), 0 - 1, "257 ids at u8, id 256 minted -> -1 (1.1.2)");
+    assert_eq(ref_encode_matches("tokenize", 8, 1), 1, "257 ids at u8, id 256 never minted: as 1.1.1");
+    var b256 = alloc(257);
+    var i = 0;
+    while (i < 255) { store8(b256 + i, i); i = i + 1; }
+    store8(b256 + 255, 0); store8(b256 + 256, 1);
+    corpus_set(b256, 257);
+    assert_eq(bpe_learn(1), 256, "255 bytes + 1 merge = 256 ids");
+    assert_eq(ref_encode_matches(b256, 257, 1), 1, "256 ids still encode at u8");
+    var sv = g_char2id;
+    g_char2id = 0;
+    assert_eq(tok_encode("hello", 5, out, 8), 0 - 1, "no tokenizer loaded -> -1 (1.1.2)");
+    g_char2id = sv;
+    return 0;
+}
+
+# Run tok_emit over ids[0, n) with stdout redirected into a pipe; returns the
+# number of bytes captured into dst (at most cap).
+fn _emit_capture(ids, n, dst, cap): i64 {
+    var fds[16];
+    if (sys_pipe(&fds) < 0) { return 0 - 1; }
+    var rfd = load32(&fds); var wfd = load32(&fds + 4);
+    var saved = syscall(SYS_DUP, 1);
+    sys_dup2(wfd, 1);
+    var i = 0;
+    while (i < n) { tok_emit(load64(ids + i * 8)); i = i + 1; }
+    sys_dup2(saved, 1);
+    sys_close(saved); sys_close(wfd);
+    var got = 0;
+    while (got < cap) {
+        var r = sys_read(rfd, dst + got, cap - got);
+        if (r <= 0) { break; }
+        got = got + r;
+    }
+    sys_close(rfd);
+    return got;
+}
+
+# tok_emit: byte and BPE output round-trip, and out-of-range ids (incl. B+K) emit nothing.
+fn test_tok_emit(): i64 {
+    test_group("tok_emit / decode_char: bytes back out");
+    g_data_w = 1;
+    corpus_set("tokenize me", 11);
+    g_hk_cap = alloc(64); g_hk_caplen = 0;
+    var i = 0;
+    while (i < g_datalen) { tok_emit(gd_ld(i)); i = i + 1; }
+    assert_eq(g_hk_caplen, 11, "byte level: one byte per id");
+    assert_eq(_bytes_eq(g_hk_cap, "tokenize me", 11), 1, "byte level: bytes round-trip");
+    g_hk_caplen = 0;
+    assert_eq(tok_emit(0 - 1), 0 - 1, "id -1 refused (1.1.2)");
+    assert_eq(tok_emit(256), 0 - 1, "byte level: id 256 refused (1.1.2)");
+    assert_eq(g_hk_caplen, 0, "refused ids emit nothing (1.1.2)");
+    g_hk_cap = 0;
+    var buf = alloc(4096);
+    cp_text(buf, 4096, 9);
+    g_data_w = 2;
+    corpus_set(buf, 4096);
+    bpe_learn(200);
+    var ids = alloc(g_datalen * 8);
+    i = 0;
+    while (i < g_datalen) { store64(ids + i * 8, gd_ld(i)); i = i + 1; }
+    var got = alloc(8192);
+    var n = _emit_capture(ids, g_datalen, got, 8192);
+    assert_eq(n, 4096, "BPE: every byte emitted");
+    assert_eq(_bytes_eq(got, buf, 4096), 1, "BPE: spans reassemble the corpus");
+    store64(ids, BPE_VMAX());
+    assert_eq(_emit_capture(ids, 1, got, 8192), 0, "BPE: id BPE_VMAX emits nothing (1.1.2)");
+    var top = g_bpe_base + g_bpe_nmerges;
+    store64(ids, top);
+    assert_eq(_emit_capture(ids, 1, got, 8192), 0, "BPE: id B+K (one past the table) emits nothing (1.1.2)");
+    assert_eq(tok_emit(top), 0 - 1, "BPE: id B+K refused (1.1.2)");
+    store64(ids, top - 1);
+    assert_eq(_emit_capture(ids, 1, got, 8192), load64(g_tok_len + (top - 1) * 8), "BPE: id B+K-1 emits its span");
+    return 0;
+}
+
+# The frozen constants, and bpe_alloc_once's allocate-once guarantee.
+fn test_constants(): i64 {
+    test_group("constants + bpe_alloc_once (frozen surface)");
+    assert_eq(BPE_MAX_MERGES(), 512, "BPE_MAX_MERGES");
+    assert_eq(BPE_VMAX(), 768, "BPE_VMAX = 256 + BPE_MAX_MERGES");
+    assert_eq(BPE_MAX_TOKLEN(), 64, "BPE_MAX_TOKLEN");
+    assert_eq(BPE_MIN_FREQ(), 2, "BPE_MIN_FREQ");
+    assert_eq(ENC_MAX(), 8192, "ENC_MAX");
+    assert_eq(STREAM_CHUNK(), 65536, "STREAM_CHUNK");
+    assert_eq(MAX_CORPUS_BYTES(), 67108864, "MAX_CORPUS_BYTES = 64 MiB");
+    bpe_alloc_once();
+    var m = g_merges; var tl = g_tok_len; var tb = g_tok_bytes; var eb = g_enc_buf;
+    assert(m != 0, "tables allocated");
+    var i = 0;
+    while (i < 50) { bpe_alloc_once(); i = i + 1; }
+    var same = 0;
+    if ((g_merges == m) && (g_tok_len == tl) && (g_tok_bytes == tb) && (g_enc_buf == eb)) { same = 1; }
+    assert_eq(same, 1, "bpe_alloc_once never reallocates");
+    g_data_w = 2;
+    corpus_set("abab abab", 9);
+    bpe_learn(2);
+    assert_eq(g_merges, m, "bpe_learn reuses the same merge table");
+    return 0;
+}
+
+# Run every group; exit with the failure count.
+fn main(): i64 {
     alloc_init();
-    test_group("smoke");
-    assert(1, "true is true");
-    assert_eq(1 + 1, 2, "math works");
+    test_golden();
+    test_oracle_learn();
+    test_oracle_encode();
+    test_corpus_set();
+    test_corpus_set_errors();
+    test_corpus_build();
+    test_loaders();
+    test_store();
+    test_stream();
+    test_bpe_learn();
+    test_bpe_learn_guards();
+    test_build_spans();
+    test_tok_encode();
+    test_tok_encode_guards();
+    test_tok_emit();
+    test_constants();
     return assert_summary();
 }
 
 var exit_code = main();
-syscall(60, exit_code);
+sys_exit(exit_code);

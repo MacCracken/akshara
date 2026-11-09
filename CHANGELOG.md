@@ -4,6 +4,112 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-11-09
+
+The P(-1) hardening, optimization and repair sweep, recorded in
+[`docs/audit/2026-11-09-audit.md`](docs/audit/2026-11-09-audit.md) —
+akshara's first standalone audit. No public signature changed, and every output
+on a valid input is bit-identical to 1.1.1 on x86_64 and aarch64: 15 golden
+cases (461,435 printed values) are `cmp`-identical across the two releases on
+both targets, and the suite now asserts their digests
+([ADR 0001](docs/adr/0001-optimizations-preserve-tokenizer-output.md)).
+
+### Fixed
+
+- **Store and output widths are validated** (MEDIUM). `corpus_set` accepted any
+  `g_data_w`, sized the store `len * w`, and wrote 8-byte tokens for any width
+  but 1 and 2 — w = 4 wrote 64 bytes past a 16-byte corpus's store into the next
+  heap block. `tok_encode`'s `ow` had the same flaw, and `ow = 1` under a vocab
+  past 256 ids truncated ids without an error. Now `corpus_set` → -6,
+  `bpe_learn` → -5 and `tok_encode` → -1 for a width other than 1, 2 or 8, and
+  `tok_encode` at `ow = 1` → -1 exactly when a merge minting an id past 255
+  applies to the text; any text whose encoding stays below 256 ids encodes as
+  before.
+- **A second `bpe_learn` no longer corrupts the tokenizer** (MEDIUM). Over a
+  store that was already BPE it restarted from the byte base and minted ids that
+  already meant something else in the store (a learn of 40 then 20 merges left a
+  47-id table over a store holding ids up to 66, and re-encoding no longer
+  reproduced the store). It now returns -4 and changes nothing; learn again
+  after a fresh `corpus_set`.
+- **`bpe_build_spans` validates the table before writing** (LOW). A forward or
+  negative merge id, a base outside [1, 256], a count past 512, or a span past
+  64 bytes read and wrote outside the span tables. It now returns -1 with every
+  span unchanged. attn11 validates tables itself, so it was never exposed.
+- **A refused `corpus_set` keeps the loaded corpus** (LOW). It used to replace
+  the corpus before allocating, so a refusal (`len = 0`, a refused allocation)
+  left `g_data = 0` and empty tables. It now validates (`len` in
+  [1, 2^60 − 1], so `len * width` cannot wrap), allocates, and only then
+  replaces anything; the codes are unchanged (-5).
+- **`tok_emit` refuses ids outside the table** (LOW) — it printed a stale span
+  from an earlier tokenizer, or read past the span table. -1, nothing emitted.
+- **`stream_tok` fails loud on a bad index or an unset cache** (LOW) instead of
+  returning a stale token or header bytes, and retries a read interrupted by a
+  signal instead of exiting.
+- **`tok_encode` with no tokenizer loaded** returns -1 instead of reading address
+  0; **`corpus_load_file`** rejects a hook that reports more than the cap (-2);
+  **`build_corpus`** checks its buffer allocation (-4).
+- **Fatal messages go to stderr** with an "akshara:" prefix (they went to stdout
+  through the consumer's `puts`, saying "attn11:"). The bundle no longer needs
+  the consumer to define `puts`: it leaves four hooks unresolved, not five.
+
+### Changed — faster, same bits
+
+Same session, median of three runs ([`docs/benchmarks.md`](docs/benchmarks.md)):
+
+- **`bpe_learn`** 9.8× (K = 64, 64 KiB: 114.2 → 11.6 ms), 5.8× (K = 512,
+  64 KiB: 738.5 → 127.3 ms), 10.2× (K = 512, 1 MiB: 7.93 → 0.77 s). The pair
+  counts are counted once and updated by exactly the pairs each merge destroys
+  and creates, instead of being zeroed and recounted before every merge
+  ([`docs/architecture/001-bpe-pair-counts.md`](docs/architecture/001-bpe-pair-counts.md));
+  the pass works on u16 directly and writes nothing before the first hit.
+- **`tok_encode`** 6.9× (4 KiB prompt: 11.71 → 1.69 ms), 5.9× (1 MiB corpus
+  rebuild: 3.05 → 0.52 s): one specialized pass per width.
+- **`corpus_set`** 2.7× (1 MiB: 10.25 → 3.75 ms) and **`gd_ld`** 1.8× (7.28 →
+  4.04 ms per 1 Mi-token sweep): the width dispatch is inlined.
+- `bpe_build_spans` is 6.5% slower (13.5 → 14.4 µs) from the new validation.
+
+### Changed
+
+- **Tests: 2 → 122 assertions**, every public function covered (`cyrius
+  coverage`: 0/21 → 21/21). `tests/golden.cyr` digests 15 fixed corpora against
+  1.1.1's outputs; `tests/reference.cyr` keeps the 1.1.1 kernels verbatim as an
+  oracle (432 learns, 111 encodes); contract and hardening tests for every error
+  code. Test entries exit through `sys_exit` (a literal `syscall(60, …)` is not
+  `exit` on aarch64).
+- **The fuzz harness is real**: 1,500 seeded rounds × 8 properties (oracle
+  equality, table well-foundedness, decode identity, exact pair counts, the
+  re-encode round-trip, hostile tables, invalid arguments), ~10 s. Mutation
+  testing: the suite and the harness each kill all 13 non-equivalent injected
+  bugs (8 kernel, 5 guard).
+- **Benchmarks**: 8 hot-path benchmarks (`tests/akshara.bcyr`, were a no-op);
+  `scripts/bench-history.sh` and `bench-history.csv` with the before and after
+  rows.
+- **CI**: fmt, lint (any warning fails, `src/` and `tests/`), `vet`,
+  `doc --check`, `deps --verify` / `--locked`, benchmarks, fuzz, and a `distlib`
+  drift check; an aarch64 job runs the suite and the smoke under qemu; a docs
+  job checks required files and version consistency. Read-only token by
+  default, write only on the release job; actions pinned by commit SHA
+  (checkout v7.0.1, action-gh-release v3.0.3); `persist-credentials: false`;
+  tag filter `X.Y.Z*`. The release ships the bundle, a source archive and
+  `SHA256SUMS` (it shipped only the smoke binary).
+- `.gitattributes` (`lib/** -text`): `cyrius.lock` records `lib/`'s bytes, so a
+  CRLF checkout would fail `deps --verify`.
+
+### Documentation
+
+- **`docs/api.md` rewritten**: it documented a `g_V` akshara does not have and
+  omitted the streaming globals, several tables, the constants and every error
+  code. Now every public fn and global and every return code.
+- `SECURITY.md` rewritten for 1.x and this audit (it described an unaudited
+  0.1.0). New: `docs/sources.md`, ADR 0001, architecture note 001,
+  `docs/benchmarks.md`, the audit. Every public fn has a doc comment
+  (`cyrius doc --check` clean; `cyrius audit` docs complete).
+- `src/tok.cyr`'s header no longer calls itself attn11's; `CLAUDE.md` and
+  `CONTRIBUTING.md` state `var buf[N]` for both scopes (module scope is N i64
+  slots); the README pins the current tag; the roadmap and getting-started
+  guide replace their scaffold templates; `cyrius.cyml` no longer lists the
+  stdlib's `file_read` as a consumer hook.
+
 ## [1.1.1] - 2026-11-09
 
 A toolchain and dependency realign to the latest releases. No source change.

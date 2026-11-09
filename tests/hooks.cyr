@@ -1,0 +1,61 @@
+# akshara test-side consumer hooks — the five symbols dist/akshara.cyr leaves
+# for its consumer (puts, _putc, secure_read_file, read_stdin, file_seek),
+# implemented for the suite, the benchmarks and the fuzz harness. Include after
+# src/tok.cyr.
+#
+# The loader hooks are programmable, so the suite can drive corpus_load_file /
+# corpus_load_stdin down every return path without touching the filesystem:
+# g_hk_rc < 0 is returned as an error; otherwise the hook copies g_hk_len bytes
+# of g_hk_src into the caller's buffer (clamped to the caller's cap, as attn11's
+# fileio.cyr does) and returns the count. A positive g_hk_lie is returned in
+# place of the count, to model a hook that reports more bytes than it wrote
+# (or than the buffer holds).
+var g_hk_rc = 0;
+var g_hk_src = 0;
+var g_hk_len = 0;
+var g_hk_lie = 0;
+var g_hk_calls = 0;
+
+# _putc capture: when g_hk_cap != 0, bytes go to it (g_hk_caplen counts them)
+# instead of stdout.
+var g_hk_cap = 0;
+var g_hk_caplen = 0;
+
+# Write a NUL-terminated string to stdout.
+fn puts(s): i64 { print(s, strlen(s)); return 0; }
+
+# Write one byte to the capture buffer, or to stdout when none is set.
+fn _putc(ch): i64 {
+    if (g_hk_cap != 0) { store8(g_hk_cap + g_hk_caplen, ch); g_hk_caplen = g_hk_caplen + 1; return 0; }
+    var b[8];
+    store8(&b, ch);
+    sys_write(1, &b, 1);
+    return 0;
+}
+
+# Shared body of the two loader hooks.
+fn _hk_load(buf, cap): i64 {
+    g_hk_calls = g_hk_calls + 1;
+    if (g_hk_rc < 0) { return g_hk_rc; }
+    var n = g_hk_len;
+    if (n > cap) { n = cap; }
+    var i = 0;
+    while (i < n) { store8(buf + i, load8(g_hk_src + i)); i = i + 1; }
+    if (g_hk_lie > 0) { return g_hk_lie; }
+    return n;
+}
+
+# Programmable stand-in for the consumer's secure_read_file(path, buf, cap).
+fn secure_read_file(path, buf, cap): i64 { return _hk_load(buf, cap); }
+
+# Programmable stand-in for the consumer's read_stdin(buf, cap).
+fn read_stdin(buf, cap): i64 { return _hk_load(buf, cap); }
+
+# Seek an fd to an absolute offset (SEEK_SET), as attn11's fileio.cyr does.
+fn file_seek(fd, off): i64 { return sys_lseek(fd, off, 0); }
+
+# Point the loader hooks at `len` bytes of `src`, returning them as success.
+fn hk_serve(src, len): i64 {
+    g_hk_rc = 0; g_hk_src = src; g_hk_len = len; g_hk_lie = 0;
+    return 0;
+}

@@ -1,0 +1,235 @@
+# akshara test oracles — the 1.1.1 tokenizer kernels, verbatim except for names.
+#
+# Shared by tests/akshara.tcyr and tests/akshara.fcyr (include after src/tok.cyr).
+# These are the bpe_learn / bpe_build_spans / tok_encode bodies as akshara 1.1.1
+# shipped them, before the 1.1.2 optimizations, renamed ref_* and routed through
+# their own copies of the 1.1.1 store accessors. They work on the same globals
+# as the library, so a comparison runs one after the other from a fresh
+# corpus_set: the optimized kernels must reproduce these outputs exactly — the
+# merge table, the packed store, every span — on every input.
+#
+# Do not "fix" or optimize anything here: the value of an oracle is that it is
+# the old code.
+
+# 1.1.1 _tw_ld.
+fn ref_tw_ld(buf, i, w): i64 {
+    if (w == 1) { return load8(buf + i); }
+    if (w == 2) { return load16(buf + i * 2); }
+    return load64(buf + i * 8);
+}
+# 1.1.1 _tw_st.
+fn ref_tw_st(buf, i, w, v): i64 {
+    if (w == 1) { store8(buf + i, v); }
+    elif (w == 2) { store16(buf + i * 2, v); }
+    else { store64(buf + i * 8, v); }
+    return 0;
+}
+# 1.1.1 gd_ld (in-memory store only).
+fn ref_gd_ld(i): i64 { return ref_tw_ld(g_data, i, g_data_w); }
+# 1.1.1 gd_st.
+fn ref_gd_st(i, v): i64 { return ref_tw_st(g_data, i, g_data_w, v); }
+
+# 1.1.1 bpe_build_spans.
+fn ref_bpe_build_spans(): i64 {
+    var t = 0;
+    while (t < g_bpe_base) {
+        store64(g_tok_len + t * 8, 1);
+        store8(g_tok_bytes + t * BPE_MAX_TOKLEN(), load64(g_vocab + t * 8));
+        t = t + 1;
+    }
+    var m = 0;
+    while (m < g_bpe_nmerges) {
+        var nid = g_bpe_base + m;
+        var l = load64(g_merges + (2 * m) * 8);
+        var r = load64(g_merges + (2 * m + 1) * 8);
+        var ll = load64(g_tok_len + l * 8);
+        var rl = load64(g_tok_len + r * 8);
+        var dst = g_tok_bytes + nid * BPE_MAX_TOKLEN();
+        var i = 0;
+        while (i < ll) { store8(dst + i, load8(g_tok_bytes + l * BPE_MAX_TOKLEN() + i)); i = i + 1; }
+        i = 0;
+        while (i < rl) { store8(dst + ll + i, load8(g_tok_bytes + r * BPE_MAX_TOKLEN() + i)); i = i + 1; }
+        store64(g_tok_len + nid * 8, ll + rl);
+        m = m + 1;
+    }
+    return 0;
+}
+
+# 1.1.1 bpe_learn.
+fn ref_bpe_learn(K): i64 {
+    if ((K < 1) || (K > BPE_MAX_MERGES())) { return 0 - 1; }
+    if ((g_data == 0) || (g_datalen < 2)) { return 0 - 2; }
+    if (g_data_w < 2) {
+        var wide = alloc(g_datalen * 2);
+        if (wide == 0) { return 0 - 3; }
+        var wi = 0;
+        while (wi < g_datalen) { store16(wide + wi * 2, load8(g_data + wi)); wi = wi + 1; }
+        g_data = wide; g_data_w = 2;
+    }
+    bpe_alloc_once();
+    if (g_paircnt == 0) { g_paircnt = t_alloc(BPE_VMAX() * BPE_VMAX()); }
+    g_bpe_base = g_corpus_vlen;
+    var B = g_bpe_base;
+    var i = 0;
+    while (i < B) { store64(g_tok_len + i * 8, 1); i = i + 1; }
+    var n = g_datalen;
+    var Vcur = B;
+    var m = 0;
+    while (m < K) {
+        var a = 0;
+        while (a < Vcur) { t_zero(g_paircnt + (a * BPE_VMAX()) * 8, Vcur); a = a + 1; }
+        i = 0;
+        while (i + 1 < n) {
+            var cell = g_paircnt + (ref_gd_ld(i) * BPE_VMAX() + ref_gd_ld(i + 1)) * 8;
+            store64(cell, load64(cell) + 1);
+            i = i + 1;
+        }
+        var best = 0; var ba = 0 - 1; var bb = 0 - 1;
+        a = 0;
+        while (a < Vcur) {
+            var la = load64(g_tok_len + a * 8);
+            var b = 0;
+            while (b < Vcur) {
+                var c = load64(g_paircnt + (a * BPE_VMAX() + b) * 8);
+                if (c > best) {
+                    if (la + load64(g_tok_len + b * 8) <= BPE_MAX_TOKLEN()) {
+                        best = c; ba = a; bb = b;
+                    }
+                }
+                b = b + 1;
+            }
+            a = a + 1;
+        }
+        if (best < BPE_MIN_FREQ()) { break; }
+        store64(g_merges + (2 * m) * 8, ba);
+        store64(g_merges + (2 * m + 1) * 8, bb);
+        var rd = 0; var wr = 0;
+        while (rd < n) {
+            var hit = 0;
+            if (rd + 1 < n) {
+                if ((ref_gd_ld(rd) == ba) && (ref_gd_ld(rd + 1) == bb)) { hit = 1; }
+            }
+            if (hit == 1) { ref_gd_st(wr, Vcur); rd = rd + 2; }
+            else { ref_gd_st(wr, ref_gd_ld(rd)); rd = rd + 1; }
+            wr = wr + 1;
+        }
+        n = wr;
+        store64(g_tok_len + Vcur * 8, load64(g_tok_len + ba * 8) + load64(g_tok_len + bb * 8));
+        Vcur = Vcur + 1;
+        m = m + 1;
+    }
+    g_bpe_nmerges = m;
+    g_datalen = n;
+    g_bpe_on = 1;
+    ref_bpe_build_spans();
+    return B + m;
+}
+
+# 1.1.1 tok_encode.
+fn ref_tok_encode(text, len, out, ow): i64 {
+    var n = 0;
+    var i = 0;
+    while (i < len) {
+        var id = load64(g_char2id + load8(text + i) * 8);
+        if (id < 0) { id = 0; }
+        ref_tw_st(out, n, ow, id);
+        n = n + 1;
+        i = i + 1;
+    }
+    if (g_bpe_on == 0) { return n; }
+    var m = 0;
+    while (m < g_bpe_nmerges) {
+        var ba = load64(g_merges + (2 * m) * 8);
+        var bb = load64(g_merges + (2 * m + 1) * 8);
+        var nid = g_bpe_base + m;
+        var rd = 0; var wr = 0;
+        while (rd < n) {
+            var hit = 0;
+            if (rd + 1 < n) {
+                if ((ref_tw_ld(out, rd, ow) == ba) && (ref_tw_ld(out, rd + 1, ow) == bb)) { hit = 1; }
+            }
+            if (hit == 1) { ref_tw_st(out, wr, ow, nid); rd = rd + 2; }
+            else { ref_tw_st(out, wr, ow, ref_tw_ld(out, rd, ow)); rd = rd + 1; }
+            wr = wr + 1;
+        }
+        n = wr;
+        m = m + 1;
+    }
+    return n;
+}
+
+# ---- comparison helpers -------------------------------------------------------
+
+# A snapshot of the learned tokenizer: [nmerges, datalen, V, merges..., data...,
+# tok_len[0..V)..., span bytes...] as i64 words. Returns the word count.
+fn snap_tok(dst, V): i64 {
+    var k = 0;
+    store64(dst + k * 8, g_bpe_nmerges); k = k + 1;
+    store64(dst + k * 8, g_datalen); k = k + 1;
+    store64(dst + k * 8, V); k = k + 1;
+    var i = 0;
+    while (i < 2 * g_bpe_nmerges) { store64(dst + k * 8, load64(g_merges + i * 8)); k = k + 1; i = i + 1; }
+    i = 0;
+    while (i < g_datalen) { store64(dst + k * 8, gd_ld(i)); k = k + 1; i = i + 1; }
+    if (V > 0) {
+        var t = 0;
+        while (t < V) {
+            var tl = load64(g_tok_len + t * 8);
+            store64(dst + k * 8, tl); k = k + 1;
+            var j = 0;
+            while (j < tl) {
+                store64(dst + k * 8, load8(g_tok_bytes + t * BPE_MAX_TOKLEN() + j));
+                k = k + 1; j = j + 1;
+            }
+            t = t + 1;
+        }
+    }
+    return k;
+}
+
+# Words needed by snap_tok for a corpus of `len` bytes (generous upper bound).
+fn snap_words(len): i64 { return 3 + 2 * BPE_MAX_MERGES() + len + BPE_VMAX() * (1 + BPE_MAX_TOKLEN()); }
+
+# 1 if a[0..n) == b[0..n) as i64 words.
+fn words_eq(a, b, n): i64 {
+    var i = 0;
+    while (i < n) { if (load64(a + i * 8) != load64(b + i * 8)) { return 0; } i = i + 1; }
+    return 1;
+}
+
+# Learn K merges over text[0, len) at store width w with the 1.1.1 oracle and
+# with the library, and return 1 when every output matches.
+fn ref_learn_matches(text, len, w, K): i64 {
+    var cap = snap_words(len);
+    var sa = alloc(cap * 8);
+    var sb = alloc(cap * 8);
+    g_data_w = w;
+    corpus_set(text, len);
+    var Va = ref_bpe_learn(K);
+    var na = 0;
+    if (Va > 0) { na = snap_tok(sa, Va); }
+    g_data_w = w;
+    corpus_set(text, len);
+    var Vb = bpe_learn(K);
+    var nb = 0;
+    if (Vb > 0) { nb = snap_tok(sb, Vb); }
+    if (Va != Vb) { return 0; }
+    if (na != nb) { return 0; }
+    return words_eq(sa, sb, na);
+}
+
+# Encode src[0, len) at width ow with the oracle and with the library against
+# the currently loaded tokenizer; 1 when the counts and ids match.
+fn ref_encode_matches(src, len, ow): i64 {
+    var oa = alloc(len * ow + 8);
+    var ob = alloc(len * ow + 8);
+    var na = ref_tok_encode(src, len, oa, ow);
+    var nb = tok_encode(src, len, ob, ow);
+    if (na != nb) { return 0; }
+    var i = 0;
+    while (i < na) {
+        if (ref_tw_ld(oa, i, ow) != ref_tw_ld(ob, i, ow)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}

@@ -1,0 +1,17 @@
+date,version,benchmark,time_ns
+2026-11-09T20:45:35Z,1.1.1,"corpus_set 1MiB u16",10247000
+2026-11-09T20:45:35Z,1.1.1,"bpe_learn K=64 64KiB",114209000
+2026-11-09T20:45:35Z,1.1.1,"bpe_learn K=512 64KiB",738526000
+2026-11-09T20:45:35Z,1.1.1,"bpe_learn K=512 1MiB",7925000000
+2026-11-09T20:45:35Z,1.1.1,"tok_encode 4KiB prompt i64 (512 merges)",11710000
+2026-11-09T20:45:35Z,1.1.1,"tok_encode 1MiB rebuild u16 (512 merges)",3053000000
+2026-11-09T20:45:35Z,1.1.1,"gd_ld sweep 1Mi u16",7277000
+2026-11-09T20:45:35Z,1.1.1,"bpe_build_spans 512 merges",13534
+2026-11-09T21:16:40Z,1.1.2,"corpus_set 1MiB u16",3745000
+2026-11-09T21:16:40Z,1.1.2,"bpe_learn K=64 64KiB",11603000
+2026-11-09T21:16:40Z,1.1.2,"bpe_learn K=512 64KiB",127335000
+2026-11-09T21:16:40Z,1.1.2,"bpe_learn K=512 1MiB",773677000
+2026-11-09T21:16:40Z,1.1.2,"tok_encode 4KiB prompt i64 (512 merges)",1694000
+2026-11-09T21:16:40Z,1.1.2,"tok_encode 1MiB rebuild u16 (512 merges)",519213000
+2026-11-09T21:16:40Z,1.1.2,"gd_ld sweep 1Mi u16",4041000
+2026-11-09T21:16:40Z,1.1.2,"bpe_build_spans 512 merges",14411

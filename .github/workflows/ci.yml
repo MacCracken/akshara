@@ -11,37 +11,206 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Read-only token. Nothing here writes to the repository, and when release.yml
+# calls this workflow the called side can only lower the caller's permissions,
+# so the CI gate never holds the release job's contents: write.
+permissions:
+  contents: read
+
 jobs:
-  build-and-test:
+  build:
     name: Build & Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4 (pinned 2026-06-19)
+      # Third-party actions are pinned to a full commit SHA (a tag can be moved);
+      # the comment names the release the SHA was taken from. persist-credentials
+      # false keeps the token out of .git/config, where the curl | sh installer
+      # below could read it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Cyrius toolchain
+        # The toolchain version is the cyrius.cyml [package].cyrius pin — the
+        # single source of truth, never hardcoded here. Hand it to the upstream
+        # install.sh, which lays out $HOME/.cyrius/{bin,lib,versions/<v>}. The
+        # hand-rolled curl+cp-into-bin form is deliberately avoided: it skips
+        # versions/<v>/ and so fails the `cyrius deps` pin-check.
         run: |
           set -e
-          # Upstream install.sh lays out $HOME/.cyrius/{bin,lib,versions/<v>} — the
-          # hand-rolled curl+cp-into-bin form skips versions/<v>/ and so fails the
-          # `cyrius deps` pin-check. Reference: patra / sigil / rosnet.
           CYRIUS_VERSION="$(grep '^cyrius = ' cyrius.cyml | head -1 | sed 's/cyrius = "\(.*\)"/\1/')"
           echo "Installing Cyrius $CYRIUS_VERSION"
           curl -sSf https://raw.githubusercontent.com/MacCracken/cyrius/main/scripts/install.sh | \
             CYRIUS_VERSION="$CYRIUS_VERSION" sh
           echo "$HOME/.cyrius/bin" >> "$GITHUB_PATH"
 
-      - name: Resolve dependencies
-        run: cyrius deps
+      - name: Resolve deps
+        # Fetches rosnet (t_alloc / t_zero; it brings tyche) and vendors the
+        # stdlib, then proves lib/ is exactly what cyrius.lock records.
+        run: |
+          cyrius deps
+          cyrius deps --verify
+          cyrius deps --locked
 
-      - name: Build
+      - name: Format check
+        run: |
+          for f in src/*.cyr tests/*.tcyr tests/*.bcyr tests/*.fcyr tests/*.cyr; do
+            cyrius fmt "$f" --check
+          done
+
+      - name: Lint
+        # Hard gate: any warning fails, in src/ and tests/.
+        run: |
+          fail=0
+          for f in src/*.cyr tests/*.tcyr tests/*.bcyr tests/*.fcyr tests/*.cyr; do
+            out=$(cyrius lint "$f" 2>&1 || true)
+            echo "$out"
+            if echo "$out" | grep -qE '^[[:space:]]*(warn|error) '; then
+              echo "lint: warnings in $f"; fail=1
+            fi
+          done
+          [ $fail -eq 0 ] || { echo "lint: warnings present"; exit 1; }
+
+      - name: Vet
+        # cyaudit vet: every file the smoke entry includes resolves, and none is
+        # untrusted. Exits 1 on a finding.
+        run: cyrius vet src/main.cyr
+
+      - name: Docs check
+        # Every public fn of the library carries a doc comment.
+        run: |
+          out=$(cyrius doc --check src/tok.cyr 2>&1)
+          echo "$out"
+          if echo "$out" | grep -q 'undocumented:'; then echo "doc: undocumented public fns"; exit 1; fi
+
+      - name: Build smoke
         run: |
           mkdir -p build
-          cyrius build src/main.cyr build/${{ github.event.repository.name }}
+          cyrius build src/main.cyr build/akshara
+          echo "smoke: $(wc -c < build/akshara) bytes"
 
-      - name: Test
-        # v5.6.28: bare `cyrius test` picks up the [build].test entry
-        # AND auto-discovers tests/*.tcyr — avoids the previous
-        # `cyrius test src/test.cyr` form that hard-failed when the
-        # stub didn't exist (Issue 1) and also wouldn't ever exercise
-        # tests/${proj}.tcyr.
+      - name: Verify ELF
+        run: xxd -l 4 build/akshara | grep -q "7f45 4c46"
+
+      - name: Run smoke
+        run: ./build/akshara
+
+      - name: Tests
+        # Bare `cyrius test` runs the [build].test entry and tests/*.tcyr.
+        # tests/akshara.tcyr is the correctness gate: 15 golden cases digested
+        # against akshara 1.1.1's outputs, the optimized kernels against the
+        # verbatim 1.1.1 kernels (tests/reference.cyr), and every public
+        # function's contract and error codes.
         run: cyrius test
+
+      - name: Benchmarks
+        run: CYRIUS_DCE=1 cyrius bench tests/akshara.bcyr
+
+      - name: Fuzz
+        run: |
+          mkdir -p build
+          CYRIUS_DCE=1 cyrius build tests/akshara.fcyr build/akshara-fuzz
+          # deterministic property fuzzing (seeded); exit 1 = a property failed
+          timeout 120 ./build/akshara-fuzz || { echo "FUZZ: property failure, crash or timeout"; exit 1; }
+
+      - name: distlib drift check
+        # akshara is a LIBRARY: consumers import dist/akshara.cyr (the [lib]
+        # bundle), not src/. Regenerate it and fail if dist/ — bundle and .deps
+        # sidecar — differs from the commit. distlib is byte-deterministic, so
+        # `git diff --exit-code` is a valid sync gate. (The bundle leaves the
+        # consumer hooks _putc / secure_read_file / read_stdin / file_seek
+        # unresolved by design.)
+        run: |
+          cyrius distlib
+          git diff --exit-code dist/ \
+            || { echo "FAIL: dist/ is stale — run 'cyrius distlib' and commit."; exit 1; }
+
+  aarch64:
+    name: aarch64 (cross + qemu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Cyrius toolchain
+        run: |
+          set -e
+          CYRIUS_VERSION="$(grep '^cyrius = ' cyrius.cyml | head -1 | sed 's/cyrius = "\(.*\)"/\1/')"
+          curl -sSf https://raw.githubusercontent.com/MacCracken/cyrius/main/scripts/install.sh | \
+            CYRIUS_VERSION="$CYRIUS_VERSION" sh
+          echo "$HOME/.cyrius/bin" >> "$GITHUB_PATH"
+
+      - name: Install qemu-user-static
+        run: sudo apt-get update && sudo apt-get install -y qemu-user-static
+
+      - name: Resolve deps
+        run: cyrius deps
+
+      - name: Cross-build + run the suite on aarch64
+        # The golden digests in tests/akshara.tcyr were recorded on x86_64; the
+        # same constants passing here is the bit-reproducibility claim, checked.
+        run: |
+          mkdir -p build
+          cyrius build --aarch64 tests/akshara.tcyr build/test_a64
+          qemu-aarch64-static build/test_a64
+
+      - name: Cross-build + run the smoke on aarch64
+        run: |
+          cyrius build --aarch64 src/main.cyr build/akshara_a64
+          qemu-aarch64-static build/akshara_a64
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Scan for dangerous patterns
+        # Informational. akshara opens no files and runs no processes (I/O goes
+        # through consumer hooks), so these never fire today; kept for parity
+        # with sibling lib repos and to catch a future regression.
+        run: |
+          if grep -rn 'syscall(59' src/ 2>/dev/null | grep -v "# "; then
+            echo "WARN: raw execve"
+          fi
+          if grep -rnE 'sys_system|exec_cmd' src/ 2>/dev/null; then
+            echo "WARN: shell execution"
+          fi
+          if grep -rn '"/etc/' src/ 2>/dev/null; then
+            echo "WARN: hardcoded /etc paths"
+          fi
+          echo "security scan complete"
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check required docs
+        # dist/akshara.cyr is required: it is the shipped consumable bundle.
+        run: |
+          MISSING=0
+          for doc in README.md CHANGELOG.md VERSION LICENSE SECURITY.md cyrius.cyml \
+                     docs/api.md docs/sources.md docs/development/state.md dist/akshara.cyr; do
+            if [ -f "$doc" ]; then echo "  OK: $doc"; else echo "  MISSING: $doc"; MISSING=1; fi
+          done
+          exit $MISSING
+      - name: Verify version consistency
+        run: |
+          FILE_VERSION=$(cat VERSION | tr -d '[:space:]')
+          CYML_RAW=$(grep '^version = ' cyrius.cyml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          # ${file:VERSION} template means cyml derives version from the VERSION
+          # file — VERSION is the single source of truth.
+          if [ "$CYML_RAW" = "\${file:VERSION}" ]; then
+              CYML_VERSION="$FILE_VERSION"
+          else
+              CYML_VERSION="$CYML_RAW"
+          fi
+          [ "$FILE_VERSION" = "$CYML_VERSION" ] || { echo "VERSION ($FILE_VERSION) != cyrius.cyml ($CYML_RAW)"; exit 1; }
+          grep -q "^## \[$FILE_VERSION\]" CHANGELOG.md || { echo "version not in changelog"; exit 1; }
+          grep -q "^# Version: $FILE_VERSION\$" dist/akshara.cyr || { echo "dist/akshara.cyr not stamped $FILE_VERSION"; exit 1; }
+          echo "Version consistent: $FILE_VERSION (cyml: $CYML_RAW)"

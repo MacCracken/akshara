@@ -1,0 +1,135 @@
+# akshara test corpora — deterministic byte generators shared by the suite
+# (tests/akshara.tcyr), the benchmarks (tests/akshara.bcyr) and the fuzz harness
+# (tests/akshara.fcyr). Include after src/tok.cyr.
+#
+# Everything here is seeded and pure i64, so every corpus is the same bytes on
+# every run and every target.
+
+# ---- PRNG: a 64-bit LCG (Knuth MMIX constants) --------------------------------
+# The state wraps mod 2^64. Draws come from the high bits, which have the full
+# period; the low bits of an LCG are weak.
+var g_cp_state = 1;
+
+# Seed the corpus PRNG.
+fn cp_seed(s): i64 { g_cp_state = s; return 0; }
+
+# Next draw in [0, 2^31).
+fn cp_next(): i64 {
+    g_cp_state = g_cp_state * 6364136223846793005 + 1442695040888963407;
+    return (g_cp_state >> 33) & 0x7FFFFFFF;
+}
+
+# Next draw in [0, n), n >= 1. The modulo bias at n << 2^31 is irrelevant here.
+fn cp_below(n): i64 { return cp_next() % n; }
+
+# ---- word-level pseudo-text ---------------------------------------------------
+# Common English words, space-separated. Text built from them has the skewed pair
+# statistics BPE is meant for (frequent short words, shared stems).
+var g_cp_wl = 0;      # the assembled word list (NUL-terminated)
+
+# Copy NUL-terminated `s` to buf + pos; return the new end position.
+fn _cp_append(buf, pos, s): i64 {
+    var n = strlen(s); var i = 0;
+    while (i < n) { store8(buf + pos + i, load8(s + i)); i = i + 1; }
+    return pos + n;
+}
+
+# The word list, assembled once from short literals (no string concatenation in
+# Cyrius, and the lint gate caps lines at 120 columns).
+fn _cp_words(): i64 {
+    if (g_cp_wl != 0) { return g_cp_wl; }
+    var b = alloc(1024);
+    var p = 0;
+    p = _cp_append(b, p, "the of and to in is that for it as with was on be by at this from or have an they which ");
+    p = _cp_append(b, p, "one you were her all she there would their we him been has when who will more no if out so ");
+    p = _cp_append(b, p, "said what up its about into than them can only other new some could time these two may ");
+    p = _cp_append(b, p, "then do first any my now such like our over man me even most made after also did many ");
+    p = _cp_append(b, p, "before must through back years where much your way well down should because each just ");
+    p = _cp_append(b, p, "those people how too little state good very make world still own see men work long get ");
+    p = _cp_append(b, p, "here between both life being under never day same another know while last might us great ");
+    p = _cp_append(b, p, "old year off come since against go came right used take three token tokens merge pair ");
+    p = _cp_append(b, p, "corpus byte bytes");
+    store8(b + p, 0);
+    g_cp_wl = b;
+    return b;
+}
+
+var g_cp_wstart = 0;   # word index -> byte offset in _cp_words()
+var g_cp_wlen = 0;     # word index -> byte length
+var g_cp_nwords = 0;
+
+# Index the word list once (start offset and length of every word).
+fn _cp_index_words(): i64 {
+    if (g_cp_nwords != 0) { return 0; }
+    var s = _cp_words();
+    var n = strlen(s);
+    g_cp_wstart = alloc(256 * 8);
+    g_cp_wlen = alloc(256 * 8);
+    var i = 0;
+    while (i < n) {
+        var st = i;
+        while ((i < n) && (load8(s + i) != 32)) { i = i + 1; }
+        store64(g_cp_wstart + g_cp_nwords * 8, st);
+        store64(g_cp_wlen + g_cp_nwords * 8, i - st);
+        g_cp_nwords = g_cp_nwords + 1;
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Fill buf[0, len) with pseudo-English: sentences of 4-14 words, with commas,
+# periods and a newline every few sentences. Returns len.
+fn cp_text(buf, len, seed): i64 {
+    _cp_index_words();
+    cp_seed(seed);
+    var s = _cp_words();
+    var p = 0;
+    var inw = 0;          # words emitted in the current sentence
+    var target = 4 + cp_below(11);
+    while (p < len) {
+        var w = cp_below(g_cp_nwords);
+        var ws = s + load64(g_cp_wstart + w * 8);
+        var wl = load64(g_cp_wlen + w * 8);
+        var j = 0;
+        while ((j < wl) && (p < len)) { store8(buf + p, load8(ws + j)); p = p + 1; j = j + 1; }
+        inw = inw + 1;
+        if (p >= len) { break; }
+        if (inw >= target) {
+            store8(buf + p, 46); p = p + 1;                 # '.'
+            if (p >= len) { break; }
+            if (cp_below(4) == 0) { store8(buf + p, 10); } else { store8(buf + p, 32); }
+            p = p + 1;
+            inw = 0; target = 4 + cp_below(11);
+        } else {
+            if (cp_below(9) == 0) { store8(buf + p, 44); p = p + 1; }   # ','
+            if (p >= len) { break; }
+            store8(buf + p, 32); p = p + 1;
+        }
+    }
+    return len;
+}
+
+# Fill buf[0, len) with uniform bytes drawn from the first `k` symbols of the
+# 256-value alphabet, k in [1, 256]. Small k makes long repeated runs, which
+# drive BPE into the BPE_MAX_TOKLEN cap.
+fn cp_bytes(buf, len, k, seed): i64 {
+    cp_seed(seed);
+    var i = 0;
+    while (i < len) { store8(buf + i, cp_below(k)); i = i + 1; }
+    return len;
+}
+
+# Fill buf[0, len) with the single byte `b` (the overlap-semantics corpus).
+fn cp_run(buf, len, b): i64 {
+    var i = 0;
+    while (i < len) { store8(buf + i, b); i = i + 1; }
+    return len;
+}
+
+# Fill buf[0, len) with all 256 byte values in a scrambled but fixed order
+# (37 is odd, so i*37 mod 256 visits every value once per 256 bytes).
+fn cp_all256(buf, len): i64 {
+    var i = 0;
+    while (i < len) { store8(buf + i, (i * 37 + 11) % 256); i = i + 1; }
+    return len;
+}

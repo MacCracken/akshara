@@ -1,0 +1,138 @@
+# akshara golden cases — fixed corpora whose every tokenizer output is digested.
+#
+# Each case loads a seeded corpus (tests/corpora.cyr), optionally learns BPE, and
+# folds every observable value into one FNV-1a digest: the corpus_set and
+# bpe_learn return values, the vocab and char2id tables, the packed store, the
+# merge table, every id's span length and bytes, and tok_encode of the corpus
+# (at two widths) and of a probe holding unseen bytes. tests/akshara.tcyr checks
+# each digest against the value recorded from akshara 1.1.1, the last release
+# before the 1.1.2 optimizations; because the suite runs on x86_64 and on aarch64,
+# the same constants also pin cross-target identity.
+#
+# With g_gold_print = 1 each value is also printed, one per line, so two builds
+# can be compared with cmp(1) instead of only by digest.
+#
+# Uses only the public API on valid inputs plus error paths whose codes 1.1.2 did
+# not change. Include after src/tok.cyr, tests/corpora.cyr and tests/hooks.cyr.
+
+var g_gold_h = 0;
+var g_gold_print = 0;
+
+# Print v as a signed decimal line.
+fn _gold_pnum(v): i64 {
+    var b[32];
+    var neg = 0;
+    if (v < 0) { neg = 1; v = 0 - v; }
+    var p = 31;
+    store8(&b + p, 10);
+    if (v == 0) { p = p - 1; store8(&b + p, 48); }
+    while (v > 0) { p = p - 1; store8(&b + p, 48 + (v % 10)); v = v / 10; }
+    if (neg == 1) { p = p - 1; store8(&b + p, 45); }
+    sys_write(1, &b + p, 32 - p);
+    return 0;
+}
+
+# Fold one value into the digest (FNV-1a over 64-bit words; the offset basis
+# 0xcbf29ce484222325 is written as its signed decimal).
+fn _gold(v): i64 {
+    g_gold_h = (g_gold_h ^ v) * 1099511628211;
+    if (g_gold_print == 1) { _gold_pnum(v); }
+    return 0;
+}
+
+# Fold the whole observable tokenizer state.
+fn _gold_state(): i64 {
+    _gold(g_corpus_vlen); _gold(g_datalen); _gold(g_data_w);
+    _gold(g_bpe_on); _gold(g_bpe_base); _gold(g_bpe_nmerges);
+    var i = 0;
+    while (i < g_corpus_vlen) { _gold(decode_char(i)); i = i + 1; }
+    i = 0;
+    while (i < 256) { _gold(load64(g_char2id + i * 8)); i = i + 1; }
+    i = 0;
+    while (i < g_datalen) { _gold(gd_ld(i)); i = i + 1; }
+    if (g_bpe_on == 1) {
+        i = 0;
+        while (i < 2 * g_bpe_nmerges) { _gold(load64(g_merges + i * 8)); i = i + 1; }
+        var t = 0;
+        while (t < g_bpe_base + g_bpe_nmerges) {
+            var tl = load64(g_tok_len + t * 8);
+            _gold(tl);
+            var j = 0;
+            while (j < tl) { _gold(load8(g_tok_bytes + t * BPE_MAX_TOKLEN() + j)); j = j + 1; }
+            t = t + 1;
+        }
+    }
+    return 0;
+}
+
+# Fold tok_encode(src, len) at width ow: the count, then every id.
+fn _gold_encode(src, len, ow): i64 {
+    var out = alloc(len * ow + 8);
+    var n = tok_encode(src, len, out, ow);
+    _gold(n);
+    var i = 0;
+    while (i < n) { _gold(_tw_ld(out, i, ow)); i = i + 1; }
+    return 0;
+}
+
+# Number of golden cases.
+fn GOLD_NCASES(): i64 { return 15; }
+
+# Run golden case `c` from a fresh digest; returns the digest.
+#   0  embedded corpus, u8 store widened by bpe_learn(512)
+#   1  "abracadabra", u8, K = 8 (the smoke)
+#   2  300 x 'a', u16, K = 512 (overlap semantics, BPE_MAX_TOKLEN cap)
+#   3  "zz", u16, K = 1 (the minimal learn)
+#   4  all 256 byte values, 512 B, u16, K = 512 (base vocab 256, ids to 767)
+#   5  all 256 byte values, 512 B, u8, byte level only
+#   6  64 KiB pseudo-text, u16, K = 512 (the realistic case)
+#   7  8 KiB pseudo-text, i64 store, K = 100
+#   8  8 KiB binary alphabet, u16, K = 512 (deep merges, TOKLEN-bounded)
+#   9  4 KiB uniform bytes, u16, K = 64 (stops early at BPE_MIN_FREQ)
+#  10  6 KiB 5-symbol alphabet, u8 widened, K = 300
+#  11  tie-break corpus, u16, K = 6
+#  12  embedded corpus, u16, K = 1, then K = 2 on a fresh corpus_set
+#  13  error codes: bpe_learn(0), bpe_learn(513), a 1-byte corpus, corpus_set len 0
+#  14  256 KiB pseudo-text, u16, K = 128
+fn gold_case(c): i64 {
+    g_gold_h = 0 - 3750763034362895579;
+    var probe = "the goal is ZQX, the next token; \t~\n";
+    var plen = strlen(probe);
+    var buf = 0; var len = 0; var K = 0; var w = 2;
+    if (c == 0) { w = 1; buf = alloc(1024); len = corpus_build(buf); K = 512; }
+    elif (c == 1) { w = 1; buf = "abracadabra"; len = 11; K = 8; }
+    elif (c == 2) { buf = alloc(300); len = cp_run(buf, 300, 97); K = 512; }
+    elif (c == 3) { buf = "zz"; len = 2; K = 1; }
+    elif (c == 4) { buf = alloc(512); len = cp_all256(buf, 512); K = 512; }
+    elif (c == 5) { w = 1; buf = alloc(512); len = cp_all256(buf, 512); K = 0; }
+    elif (c == 6) { buf = alloc(65536); len = cp_text(buf, 65536, 23); K = 512; }
+    elif (c == 7) { w = 8; buf = alloc(8192); len = cp_text(buf, 8192, 5); K = 100; }
+    elif (c == 8) { buf = alloc(8192); len = cp_bytes(buf, 8192, 2, 7); K = 512; }
+    elif (c == 9) { buf = alloc(4096); len = cp_bytes(buf, 4096, 256, 3); K = 64; }
+    elif (c == 10) { w = 1; buf = alloc(6144); len = cp_bytes(buf, 6144, 5, 9); K = 300; }
+    elif (c == 11) { buf = "xyxyxy pqpqpq xyxy pqpq yx qp"; len = 29; K = 6; }
+    elif (c == 12) {
+        g_data_w = 2; buf = alloc(1024); len = corpus_build(buf);
+        _gold(corpus_set(buf, len)); _gold(bpe_learn(1)); _gold_state();
+        K = 2;
+    }
+    elif (c == 13) {
+        g_data_w = 2;
+        _gold(bpe_learn(0));
+        _gold(bpe_learn(513));
+        _gold(corpus_set("q", 1));
+        _gold(bpe_learn(5));
+        _gold(corpus_set("q", 0));
+        return g_gold_h;
+    }
+    elif (c == 14) { buf = alloc(262144); len = cp_text(buf, 262144, 41); K = 128; }
+    g_data_w = w;
+    _gold(corpus_set(buf, len));
+    if (K > 0) { _gold(bpe_learn(K)); }
+    _gold_state();
+    _gold_encode(g_text, g_textlen, 2);
+    _gold_encode(g_text, g_textlen, 8);
+    _gold_encode(probe, plen, 8);
+    if (g_bpe_on == 0) { _gold_encode(g_text, g_textlen, 1); }
+    return g_gold_h;
+}

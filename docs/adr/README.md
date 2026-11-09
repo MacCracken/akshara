@@ -19,4 +19,4 @@ Decisions about akshara — what we chose, the context, and the consequences we 
 
 ## Index
 
-_No ADRs yet. Add the first as `0001-kebab-case-title.md`._
+- [0001 — Optimizations preserve every tokenizer output bit for bit](0001-optimizations-preserve-tokenizer-output.md) — Accepted, 2026-11-09
