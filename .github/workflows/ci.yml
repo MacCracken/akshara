@@ -141,8 +141,21 @@ jobs:
             CYRIUS_VERSION="$CYRIUS_VERSION" sh
           echo "$HOME/.cyrius/bin" >> "$GITHUB_PATH"
 
-      - name: Install qemu-user-static
-        run: sudo apt-get update && sudo apt-get install -y qemu-user-static
+      - name: Install qemu (user-mode aarch64)
+        # `qemu-user-static` is only a virtual package on current Ubuntu runner
+        # images (provided by qemu-user-binfmt), so apt has no candidate for it;
+        # `qemu-user` is the real package on every supported image. Its binary
+        # is `qemu-aarch64` (older images named the static build
+        # `qemu-aarch64-static`), so resolve whichever exists, once, into $QEMU.
+        # The cross-built binaries are static ELFs, so either form runs them.
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y qemu-user
+          QEMU="$(command -v qemu-aarch64-static || command -v qemu-aarch64 || true)"
+          [ -n "$QEMU" ] || { echo "no qemu-aarch64 binary after installing qemu-user"; exit 1; }
+          "$QEMU" --version | head -1
+          echo "QEMU=$QEMU" >> "$GITHUB_ENV"
 
       - name: Resolve deps
         run: cyrius deps
@@ -153,12 +166,12 @@ jobs:
         run: |
           mkdir -p build
           cyrius build --aarch64 tests/akshara.tcyr build/test_a64
-          qemu-aarch64-static build/test_a64
+          "$QEMU" build/test_a64
 
       - name: Cross-build + run the smoke on aarch64
         run: |
           cyrius build --aarch64 src/main.cyr build/akshara_a64
-          qemu-aarch64-static build/akshara_a64
+          "$QEMU" build/akshara_a64
 
   security:
     name: Security Scan
