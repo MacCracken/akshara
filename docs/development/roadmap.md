@@ -1,42 +1,65 @@
 # akshara — Roadmap
 
-> Milestone plan. State lives in [`state.md`](state.md); this file is the
-> sequencing — what shipped, what is next, against what gates.
+> Remaining work only; shipped work is in [`CHANGELOG.md`](../../CHANGELOG.md),
+> current state in [`state.md`](state.md).
+>
+> **1.x** takes only changes that keep every output on a valid input
+> bit-identical ([ADR 0001](../adr/0001-optimizations-preserve-tokenizer-output.md))
+> and every frozen signature ([`docs/api.md`](../api.md)) intact. Each item's gate
+> is the suite's golden digests and 1.1.1 oracle, the fuzz harness, the aarch64
+> CI job, and before/after rows in `bench-history.csv`. Anything that needs more
+> than that is in the **2.0.0 backlog**.
 
-## v1.0 criteria — met at 1.0.0 (2026-07-05), evidence completed in 1.1.2
+## 1.2.x — faster BPE learn
 
-- [x] Public API frozen — every exported symbol documented ([`docs/api.md`](../api.md); `cyrius doc --check` clean since 1.1.2) and tested (the 1.1.2 suite covers every public function)
-- [x] Test coverage adequate for the surface area — golden digests, the 1.1.1 oracle, contract tests, a property fuzzer (1.1.2)
-- [x] Benchmarks captured in [`docs/benchmarks.md`](../benchmarks.md) (1.1.2)
-- [x] At least one downstream consumer green — attn11 (origin), tarka, tentib, prajna
-- [x] CHANGELOG complete from v0.1.0 onward
-- [x] Security audit pass — [`docs/audit/2026-11-09-audit.md`](../audit/2026-11-09-audit.md) (1.1.2)
+- **Per-row maximum cache in `bpe_learn`'s argmax.** The argmax rescans the
+  whole live V × V count table on every merge: 68% of a K = 512 learn on
+  64 KiB (88 of 129 ms, measured by running it twice). Keep each row's best
+  eligible count and its smallest column, rescan only the rows a merge pass
+  touched, and pick the row maximum in ascending row order, so the tie-break is
+  unchanged. Done when the argmax share of that row falls substantially and the
+  new invariant has its own mutation coverage (a stale row, a wrong column on a
+  tie).
+- **Fuzz harness on aarch64 in CI.** Today only the suite runs under qemu; the
+  harness takes about 80 s there at 1,500 rounds. Add a reduced-round aarch64
+  fuzz step (round count as a build flag or an argument).
 
-## Milestones
+## 1.3.x — faster prompt encode
 
-### M0 — Scaffold (v0.1.0) — shipped 2026-06-22
+- **Rank-ordered encoder for short inputs.** Applying merges lowest rank
+  first, leftmost on ties, reproduces the pass-per-merge output exactly (the
+  1.1.2 audit has the argument). It needs a linked list over the input. Allocate
+  that once at `ENC_MAX` (8,192 ids), so the prompt path still allocates nothing
+  per call, and keep the per-merge passes for longer inputs such as the corpus
+  rebuild. Done when the 4 KiB prompt row improves and the oracle and fuzz
+  comparisons cover both paths at every width.
 
-### M1 — Extraction from attn11 (v0.1.0) — shipped 2026-06-22
+## 1.x.x — standing work
 
-The text → token-id layer carved out of attn11 byte-identically; attn11
-re-pointed to `[deps.akshara]`.
+- **Toolchain and dependency realigns** as patch releases whenever the cyrius
+  pin moves. The pin, `lib/` (`cyrius lib sync --full`) and `cyrius.lock`
+  (regenerated from scratch) change in one commit.
+- **CI action pins.** Move softprops/action-gh-release from v3.0.3 to the
+  current release, by commit SHA, in step with rosnet and tyche.
 
-### M2 — v1.0 freeze — shipped 2026-07-05
+## 2.0.0 backlog — needs a semantics or surface change
 
-### 1.x — toolchain realigns and the P(-1) sweep
-
-1.0.1 – 1.1.1 follow the cyrius pin (6.5.27 → 6.7.18) with no source change.
-1.1.2 is the first P(-1) hardening, optimization and repair sweep: bit-identical
-outputs, 5–10× faster learn and encode, validated tables and arguments.
-
-## Next (unscheduled)
-
-- Faster BPE learn on large corpora: the per-merge rewrite pass is O(n), so a
-  64 MiB corpus at K = 512 still takes tens of seconds (audit, *not changed*).
-- Consumers onto the current 1.x tag (all four were on 1.0.2 at 1.1.2).
-
-## Out of scope (for 1.x)
-
-- Any change to merge selection, counting, or encode semantics — a 2.0 change
-  ([ADR 0001](../adr/0001-optimizations-preserve-tokenizer-output.md)).
-- Pre-tokenization (word splitting), Unicode normalization, special tokens.
+- **Remove the per-merge O(n) pass.** At the 64 MiB loader cap with K = 512,
+  `bpe_learn` takes 45.7 s and the corpus rebuild 31.5 s, because each merge
+  rewrites the whole store. A per-pair position index removes that pass but
+  costs several bytes per token (gigabytes at the cap), breaking the
+  fixed-allocation budget consumers size for.
+- **`stream_tok` returns an error instead of exiting.** It exits on a bad
+  index, a failed seek or a short read because its callers (the training
+  samplers) have no error path today; changing that changes their contract.
+- **A tokenizer handle instead of process-global `g_*` state.** Today one corpus
+  and one tokenizer exist per process, and consumers read and write the globals
+  directly and serialize them into checkpoints.
+- **Larger caps.** `BPE_MAX_MERGES` 512, `BPE_VMAX` 768 and `BPE_MAX_TOKLEN` 64
+  are frozen constants that consumers size fixed buffers from (attn11's
+  checkpoint loader keeps a 768-slot stack table) and that checkpoints and
+  shards encode.
+- **Tokenization semantics.** Any change to merge selection, pair counting or
+  encode order, plus pre-tokenization (word splitting), Unicode normalization
+  and special tokens. Each changes which ids a text encodes to, and so
+  invalidates every trained checkpoint.
