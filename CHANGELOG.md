@@ -4,6 +4,41 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-11-09
+
+A dependency update. No source change.
+
+### Changed
+
+- **`[deps.rosnet]` `1.2.2` → `1.4.1`**, the latest rosnet. The toolchain stays
+  6.7.18 and tyche stays 1.2.2. akshara calls only `t_alloc` and `t_zero`,
+  which are byte-identical between the two releases, as is their failure path.
+  rosnet's 1.3.0–1.4.1 changes are GPU attention and AVX2 paths for its linear
+  and BLAS-1 kernels, none of which akshara calls. Vendored `lib/rosnet.cyr`
+  byte-matches the 1.4.1 bundle.
+- **`cyrius.lock` regenerated from scratch**: rosnet 1.4.1 (`af2bb1a`), tyche
+  1.2.2 (`cdb74e2`), 115 file hashes. `cyrius deps --verify` and `--locked` are
+  clean.
+- **rosnet's bundle now begins with `include "lib/simd.cyr"`** (a new leaf in
+  its sidecar). akshara vendors the whole 6.7.18 snapshot, so `lib/simd.cyr` was
+  already present and is unchanged. akshara's own bundle changes only in its
+  version line; its sidecar is still `io`, and it still leaves the same four
+  hooks unresolved.
+- **Every output is unchanged.** The suite passes 122/122 on x86_64 and on
+  aarch64 (qemu), and the fuzz harness passes 1,500 rounds. The full
+  461,435-value golden dump is `cmp`-identical to 1.1.1 on both targets.
+- **Benchmarks** (interleaved A/B in one session: the same akshara source built
+  against the rosnet 1.2.2 and 1.4.1 bundles, alternating processes, median of
+  3):
+  - slower: `corpus_set` +4.0%, `bpe_learn` K = 512 on 64 KiB +5.0%,
+    `tok_encode` 4 KiB prompt +2.3%;
+  - faster: the `gd_ld` sweep −7.1%;
+  - the other four rows within ±1%.
+
+  Both builds execute the same functions from the same source, so the
+  differences come from where the larger bundle places code in the binary. The
+  smoke binary grows from 204,112 to 225,800 B (without DCE).
+
 ## [1.1.2] - 2026-11-09
 
 The P(-1) hardening, optimization and repair sweep, recorded in

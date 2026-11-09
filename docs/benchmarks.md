@@ -44,6 +44,30 @@ What moved each row:
   writing a span (security, not speed; it runs once per checkpoint or shard
   install).
 
+## 1.1.2 → 1.1.3: rosnet 1.2.2 → 1.4.1 (2026-11-09, interleaved A/B)
+
+No akshara source changed, and the two rosnet functions akshara calls
+(`t_alloc`, `t_zero`) are byte-identical in both releases. The benchmark was
+built twice in the same session, against the rosnet 1.2.2 and 1.4.1 bundles,
+and the two binaries were run alternately three times each (median):
+
+| Benchmark | rosnet 1.2.2 | rosnet 1.4.1 | Change |
+|---|---:|---:|---:|
+| `corpus_set` 1 MiB, u16 store | 3.565 ms | 3.709 ms | +4.0% |
+| `bpe_learn` K = 64, 64 KiB | 11.69 ms | 11.70 ms | +0.1% |
+| `bpe_learn` K = 512, 64 KiB | 125.6 ms | 132.0 ms | +5.0% |
+| `bpe_learn` K = 512, 1 MiB | 772.7 ms | 779.7 ms | +0.9% |
+| `tok_encode` 4 KiB prompt → i64 | 1.755 ms | 1.796 ms | +2.3% |
+| `tok_encode` 1 MiB rebuild → u16 | 518.1 ms | 516.4 ms | −0.3% |
+| `gd_ld` sweep, 1 Mi tokens u16 | 4.060 ms | 3.770 ms | −7.1% |
+| `bpe_build_spans`, 512 merges | 14.4 µs | 14.3 µs | −0.7% |
+
+Both builds execute the same functions from the same source; only where the
+larger rosnet bundle places code in the binary differs. Read the ±5–7% rows as
+code-placement effects, not as more or less work. The `bench-history.csv`
+1.1.3 row was recorded 35 minutes after the 1.1.2 row, so it also carries
+machine-state drift; this table is the like-for-like comparison.
+
 ## At the 64 MiB loader cap (1.1.2 only, one run)
 
 | Operation | 1.1.2 |

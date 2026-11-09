@@ -29,7 +29,7 @@ SFT/diffusion training reference) and [tarka](https://github.com/MacCracken/tark
 ```toml
 [deps.akshara]
 git = "https://github.com/MacCracken/akshara"
-tag = "1.1.2"
+tag = "1.1.3"
 modules = ["dist/akshara.cyr"]
 ```
 

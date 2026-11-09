@@ -5,6 +5,9 @@
 
 ## Version
 
+**1.1.3** (2026-11-09) — rosnet `1.2.2` → `1.4.1`, no source change; every
+output is identical to 1.1.1 on x86_64 and aarch64 (the full golden dump).
+
 **1.1.2** (2026-11-09) — the first P(-1) hardening, optimization and repair
 sweep ([`docs/audit/2026-11-09-audit.md`](../audit/2026-11-09-audit.md)): two
 MEDIUM and ten LOW findings fixed, `bpe_learn` 5.8–10.2× and `tok_encode`
@@ -75,7 +78,7 @@ Consumers are on the 1.x line: attn11, tentib, prajna and tarka all declare
 Direct (declared in `cyrius.cyml`):
 
 - stdlib — string, fmt, alloc, io, vec, str, syscalls, assert, bench, math
-- [`rosnet`](https://github.com/MacCracken/rosnet) 1.2.2 — `t_alloc` / `t_zero`
+- [`rosnet`](https://github.com/MacCracken/rosnet) 1.4.1 — `t_alloc` / `t_zero`
   (the typed bump-allocator the vocab / packed store / BPE tables use)
 
 Transitive (via rosnet; locked in `cyrius.lock`):
@@ -90,11 +93,12 @@ Transitive (via rosnet; locked in `cyrius.lock`):
 - [tarka](https://github.com/MacCracken/tarka) — intended shared consumer (one
   tokenizer behind SFT/diffusion and RL/reasoning).
 
-## Performance (1.1.2, x86_64, median of 3)
+## Performance (1.1.3, x86_64, median of 3)
 
-`bpe_learn` K = 512: 127 ms / 64 KiB, 774 ms / 1 MiB, 45.7 s at the 64 MiB cap.
-`tok_encode`: 1.69 ms per 4 KiB prompt (512 merges); corpus rebuild 519 ms /
-1 MiB, 31.5 s at the cap. See [`docs/benchmarks.md`](../benchmarks.md).
+`bpe_learn` K = 512: 134 ms / 64 KiB, 798 ms / 1 MiB (45.7 s at the 64 MiB cap,
+measured on 1.1.2). `tok_encode`: 1.82 ms per 4 KiB prompt (512 merges); corpus
+rebuild 526 ms / 1 MiB (31.5 s at the cap, 1.1.2). See
+[`docs/benchmarks.md`](../benchmarks.md).
 
 ## Next
 

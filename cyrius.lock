@@ -1,4 +1,4 @@
-commit	5c27e7da6a8d8d8fcd2c1d3b2e26dde8a22b142a	rosnet	https://github.com/MacCracken/rosnet	1.2.2
+commit	af2bb1a98f31d6447ff2ea4b937dcb92acc543cb	rosnet	https://github.com/MacCracken/rosnet	1.4.1
 commit	cdb74e281920da6130bd48f1de37d9b150ab0d3d	tyche	https://github.com/MacCracken/tyche	1.2.2
 346716377b00f36e58eb16cf7fe1dd62dd8fe577930d0d0429f822795b35817c  lib/alloc.cyr
 5afd5bb7cba4e49fee331f6a2838f4e01d9781defaf531403f6616f42ac7151b  lib/alloc_agnos.cyr
@@ -61,7 +61,7 @@ fcb75521a02fedbcb57f9df23c91c38ccfeb53f1077c8dd607020f7b6a889e33  lib/regex.cyr
 4a726d975d59a8dee865677f80fd4df20fc2137fa923c96b0b0ad571a5657bb4  lib/regression.cyr
 7a37b0eda9534c252299f52ead692e29457366ba4d54a42aa1234d76bc9ffd60  lib/regression_agnos.cyr
 8a438b754f1f8faeb7e75396588ef12cb09d90219f538a362e0d0f6155d39fee  lib/result.cyr
-ee7c98a46d1082ddfddc712c926e05a72fbd5c82de70b09897f0057261b0f27a  lib/rosnet.cyr
+a63f3ba43ba853740ca15a36b6d70768ec0c2f7e98ab8f67a30b28fc8bf1390e  lib/rosnet.cyr
 8a819554322481362914adfa5be8a31b49b67ed3ad37a5ed6912eb230b09dbb2  lib/sakshi.cyr
 a25aa36f3ef76834c24a171f36a6b81fdec039d8a555f8dd428c9421f517eeb0  lib/sandhi.cyr
 64cc2f946bd2051e6a15b001eeefc4338b12be58cd45920eeb9250383ba5d2e0  lib/sankoch.cyr
