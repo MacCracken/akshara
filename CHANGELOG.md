@@ -4,6 +4,70 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-11-09
+
+A toolchain and dependency realign to the latest releases. No source change.
+
+### Changed
+
+- **Toolchain `6.7.9` → `6.7.18`** (through 6.7.10–6.7.17), the latest cyrius
+  release. `src/` is unchanged, and so is every value akshara computes: 1.1.0's
+  2,192-value tokenizer dump is byte-identical at 6.7.18, on x86_64 and on
+  aarch64 (under qemu), so it matches 6.6.20 and 6.7.9 too. Suite **2/2**
+  unchanged; fmt, lint (including 6.7.11's and 6.7.12's new warnings, over
+  `src/` and `tests/`), `vet`, bench and fuzz pass. The smoke binary grows from
+  188,048 to 195,744 B, all of it unreachable stdlib code; with DCE it shrinks
+  from 32,400 to 31,904 B.
+
+  Upstream changes checked against akshara's source (`src/`, `tests/`), from
+  the 6.7.10–6.7.18 sections of cyrius's `ecosystem-migration.md`. Nearly all of
+  it concerns structs, generics, traits, vectors, multi-value returns, `Str`,
+  net/TLS/threads and platform ports, which akshara does not use. The rest:
+  - **6.7.11** and **6.7.12** add lint rules for buffer overruns, write lengths
+    and array sizing. All six source and test files lint with 0 warnings.
+  - **6.7.11** refuses a top-level `return` and stops running `main` twice in a
+    program with no explicit exit. Every akshara entry ends with an explicit
+    exit (`sys_exit` or `syscall`) and has no top-level `return`.
+  - **6.7.14** bakes constant global initializers into the image instead of
+    storing them at startup (`var g_stream_fd = 0 - 1;` and the rest of
+    `src/tok.cyr`'s globals). Same values; nothing writes them earlier.
+  - **6.7.17** refuses an include line with code after the file name, and a
+    statement that is only a value builtin. `src/main.cyr`'s includes carry only
+    a trailing `#` comment, which is allowed, and akshara has no bare
+    `load*(…);` statement.
+  - No akshara name (including the five consumer-hook stubs in `src/main.cyr`)
+    collides with a fn or global in the 6.7.18 stdlib, rosnet or tyche, so the
+    new duplicate-fn warnings do not fire.
+- **`[deps.rosnet]` `1.2.0` → `1.2.2`**, the latest rosnet, built against 6.7.18.
+  It brings tyche `1.2.0` → `1.2.2` transitively. rosnet 1.2.2's CPU results are
+  bit-identical to 1.2.1. Its one change on akshara's surface is `t_alloc`:
+  `t_alloc(0)` now returns an empty tensor instead of exiting, a negative or
+  wrapping size exits with "invalid size", and its errors go to stderr. akshara
+  calls `t_alloc` only with fixed positive sizes (256, 1,024, 768, 8,192 and
+  589,824), so none of that reaches it. tyche 1.2.2 gives the same bits as
+  1.2.0 for every state its API can reach. Vendored `lib/rosnet.cyr` and
+  `lib/tyche.cyr` byte-match the tagged `dist/` bundles.
+- **Vendored `lib/` re-synced** (`cyrius lib sync --full`). It byte-matches the
+  6.7.18 snapshot: the same 113 files as 6.7.9, 66 of them with new content.
+- **`lib/agnosys.cyr` removed**, as rosnet 1.2.2 did. It was a scaffold-era file
+  that no cyrius snapshot from 6.6.0 on ships, that nothing in akshara used, and
+  that `lib sync --full` never prunes. `lib/` is now exactly the 6.7.18 snapshot
+  plus rosnet and tyche.
+- **`cyrius.lock` regenerated from scratch.** One line each for rosnet 1.2.2
+  (`5c27e7d`) and tyche 1.2.2 (`cdb74e2`), 115 file hashes (116 less
+  `agnosys`), trailer `cyrius 6.7.18`. `cyrius deps --verify` and
+  `cyrius deps --locked` are clean.
+- `dist/akshara.cyr` changes only in its version line, and `dist/akshara.deps`
+  is unchanged (`io`).
+
+### Note — the pin, `lib/` and `cyrius.lock` land together
+
+From 6.7.18, with a fully vendored `lib/`, cyrius refuses a moved pin until
+`lib/` follows it: `cyrius deps` and `cyrius build` exit 1 ("cyrius.lock not
+re-locked") until `cyrius lib sync --full` runs. A commit that moves the pin in
+`cyrius.cyml` without `lib/` and `cyrius.lock` fails CI at its `cyrius deps`
+step.
+
 ## [1.1.0] - 2026-11-09
 
 Moves akshara onto the cyrius 6.7 series. No library or API change.

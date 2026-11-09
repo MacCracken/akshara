@@ -5,10 +5,11 @@
 
 ## Version
 
-**1.1.0** (2026-11-09) — moves onto the cyrius 6.7 series (6.7.9), no source
-change; every tokenizer value is byte-identical to 1.0.4 @ 6.6.20 (see CHANGELOG).
-The 1.x surface is the one frozen at 1.0.0. Prior: **1.0.4** (2026-11-09) —
-toolchain + dependency realign to cyrius 6.6.20.
+**1.1.1** (2026-11-09) — toolchain + dependency realign to the latest releases
+(cyrius 6.7.18, rosnet 1.2.2), no source change; every tokenizer value is
+byte-identical to 1.0.4 @ 6.6.20 and 1.1.0 @ 6.7.9 (see CHANGELOG). The 1.x
+surface is the one frozen at 1.0.0. Prior: **1.1.0** (2026-11-09) — onto the
+cyrius 6.7 series (6.7.9); **1.0.4** (2026-11-09) — realign to cyrius 6.6.20.
 
 **1.0.0** — **stable, API frozen** (cut 2026-07-05). A clean freeze with no
 behavior change from 0.1.0: what the shipping consumers (attn11 — the origin,
@@ -28,9 +29,9 @@ Consumers are on the 1.x line: attn11, tentib, prajna and tarka all declare
 
 ## Toolchain
 
-- **Cyrius pin**: `6.7.9` (in `cyrius.cyml [package].cyrius`)
+- **Cyrius pin**: `6.7.18` (in `cyrius.cyml [package].cyrius`)
 
-**Pin bumped to `6.7.9` 2026-11-09** (from 6.6.20, itself bumped from 6.6.2 the same day). `cyrius lib sync --full` re-vendored the whole version-matched stdlib snapshot (113 files) and `cyrius.lock` was regenerated from scratch; suite re-verified green at the new pin, smoke green on x86_64 and aarch64 (qemu), and a 2,192-value tokenizer dump is byte-identical to 6.6.20 on both. Run the suite with bare `cyrius test` (`cyrius tests` is deprecated from 6.7.6, removed in 6.7.12).
+**Pin bumped to `6.7.18` 2026-11-09** (6.6.2 → 6.6.20 → 6.7.9 → 6.7.18 the same day). `cyrius lib sync --full` re-vendored the whole version-matched stdlib snapshot (113 files) and `cyrius.lock` was regenerated from scratch; suite re-verified green at the new pin, smoke green on x86_64 and aarch64 (qemu), and a 2,192-value tokenizer dump is byte-identical to 6.6.20 and 6.7.9 on both. From 6.7.18 a moved pin is refused until `lib/` is re-synced, so the pin, `lib/` and `cyrius.lock` must land in one commit. Run the suite with bare `cyrius test` (`cyrius tests` is deprecated from 6.7.6, removed in 6.7.12).
 
 ## Source
 
@@ -62,12 +63,12 @@ Consumers are on the 1.x line: attn11, tentib, prajna and tarka all declare
 Direct (declared in `cyrius.cyml`):
 
 - stdlib — string, fmt, alloc, io, vec, str, syscalls, assert, bench, math
-- [`rosnet`](https://github.com/MacCracken/rosnet) 1.2.0 — `t_alloc` / `t_zero`
+- [`rosnet`](https://github.com/MacCracken/rosnet) 1.2.2 — `t_alloc` / `t_zero`
   (the typed bump-allocator the vocab / packed store / BPE tables use)
 
 Transitive (via rosnet; locked in `cyrius.lock`):
 
-- [`tyche`](https://github.com/MacCracken/tyche) 1.2.0 — PRNG for rosnet's
+- [`tyche`](https://github.com/MacCracken/tyche) 1.2.2 — PRNG for rosnet's
   `t_randn`; no akshara path uses it
 
 ## Consumers
