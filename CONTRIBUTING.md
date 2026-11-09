@@ -12,7 +12,8 @@
    `tests/akshara.tcyr`: golden digests, the 1.1.1 oracle, every public
    function's contract.
 5. `CYRIUS_DCE=1 cyrius build tests/akshara.fcyr build/akshara-fuzz && ./build/akshara-fuzz`
-   — the seeded property fuzzer.
+   — the seeded property fuzzer (1,500 rounds). Add `-D AK_FUZZ_QUICK` for the
+   500-round build CI runs on aarch64.
 6. `CYRIUS_DCE=1 cyrius bench tests/akshara.bcyr` — benchmarks;
    `./scripts/bench-history.sh` appends medians to `bench-history.csv`.
 7. `cyrius distlib` — regenerate the consumer bundle `dist/akshara.cyr` from

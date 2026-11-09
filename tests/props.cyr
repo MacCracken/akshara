@@ -80,6 +80,32 @@ fn _paircnt_exact(): i64 {
     return 1;
 }
 
+# 1 if bpe_learn's argmax row cache matches a fresh scan of g_paircnt for every
+# live row: the largest count among the cells whose span fits BPE_MAX_TOKLEN, at
+# the smallest such column (0 and -1 when no eligible cell is positive). Scans
+# right to left with >=, a different route to the same cell. White box: the
+# cache is internal (1.2.0) and exact after every learn.
+fn _rowcache_exact(): i64 {
+    var V = g_bpe_base + g_bpe_nmerges;
+    var TL = BPE_MAX_TOKLEN();
+    var a = 0;
+    while (a < V) {
+        var mx = 0; var arg = 0 - 1;
+        var b = V - 1;
+        while (b >= 0) {
+            var c = load64(g_paircnt + (a * BPE_VMAX() + b) * 8);
+            if ((c > 0) && (c >= mx) && (load64(g_tok_len + a * 8) + load64(g_tok_len + b * 8) <= TL)) {
+                mx = c; arg = b;
+            }
+            b = b - 1;
+        }
+        if (load64(_bpe_rmax + a * 8) != mx) { return 0; }
+        if (load64(_bpe_rarg + a * 8) != arg) { return 0; }
+        a = a + 1;
+    }
+    return 1;
+}
+
 # Snapshot every span: g_tok_len[0, VMAX) then the raw span bytes.
 fn _snap_spans(dst): i64 {
     var i = 0;

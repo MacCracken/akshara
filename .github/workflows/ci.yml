@@ -173,6 +173,15 @@ jobs:
           cyrius build --aarch64 src/main.cyr build/akshara_a64
           "$QEMU" build/akshara_a64
 
+      - name: Cross-build + run the fuzz harness on aarch64
+        # -D AK_FUZZ_QUICK runs the first 500 of the 1,500 seeded rounds. Each
+        # round draws everything from its own seed, so these are the same rounds
+        # the x86_64 job runs, now checked under emulation at a third the time.
+        run: |
+          CYRIUS_DCE=1 cyrius build --aarch64 -D AK_FUZZ_QUICK tests/akshara.fcyr build/akshara-fuzz_a64
+          timeout 300 "$QEMU" build/akshara-fuzz_a64 \
+            || { echo "FUZZ (aarch64): property failure, crash or timeout"; exit 1; }
+
   security:
     name: Security Scan
     runs-on: ubuntu-latest

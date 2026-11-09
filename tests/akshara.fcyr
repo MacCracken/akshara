@@ -2,6 +2,8 @@
 #
 # Build and run as CI does:
 #   CYRIUS_DCE=1 cyrius build tests/akshara.fcyr build/akshara-fuzz && ./build/akshara-fuzz
+# Built with -D AK_FUZZ_QUICK it runs the first 500 rounds only (CI's aarch64
+# job, under qemu).
 # Deterministic: round r draws everything from seed r, so a failure names the
 # round that reproduces it. Exit 0 = every property held; 1 = a property failed
 # (the message names it, on stderr).
@@ -11,7 +13,8 @@
 #   P1  bpe_learn == the 1.1.1 oracle (merge table, store, every span)
 #   P2  the learned table is well-founded and BPE_MAX_TOKLEN-bounded
 #   P3  the store decodes back to the corpus bytes
-#   P4  g_paircnt holds the exact pair counts of the final store
+#   P4  g_paircnt holds the exact pair counts of the final store, and the
+#       argmax row cache equals a fresh scan of them (1.2.0)
 #   P5  tok_encode(corpus) reproduces the store, at u16 and i64
 #   P6  tok_encode of a random probe == the oracle, at every legal width; at u8,
 #       refused exactly when the encoding needs an id past 255
@@ -28,17 +31,31 @@ include "tests/props.cyr"
 
 var g_fz_round = 0;
 
-# Report a failed property for the current round and exit 1.
-fn fz_fail(msg): i64 {
-    var b[32];
-    var v = g_fz_round; var p = 31;
-    store8(&b + p, 10);
+#ifdef AK_FUZZ_QUICK
+# Rounds to run: the quick build's first 500 (the same rounds the full run
+# starts with, since every round draws from its own seed).
+fn FZ_ROUNDS(): i64 { return 500; }
+#else
+# Rounds to run: the full 1,500.
+fn FZ_ROUNDS(): i64 { return 1500; }
+#endif
+
+# Write v (>= 0) to fd in decimal.
+fn fz_putn(fd, v): i64 {
+    var b[24];
+    var p = 24;
     if (v == 0) { p = p - 1; store8(&b + p, 48); }
     while (v > 0) { p = p - 1; store8(&b + p, 48 + (v % 10)); v = v / 10; }
+    sys_write(fd, &b + p, 24 - p);
+    return 0;
+}
+
+# Report a failed property for the current round and exit 1.
+fn fz_fail(msg): i64 {
     sys_write(2, "FUZZ FAIL: ", 11);
     sys_write(2, msg, strlen(msg));
     sys_write(2, " (round ", 8);
-    sys_write(2, &b + p, 31 - p);
+    fz_putn(2, g_fz_round);
     sys_write(2, ")\n", 2);
     sys_exit(1);
     return 0;
@@ -92,6 +109,7 @@ fn fz_round(buf, probe, snap, cur, sz): i64 {
     if (_table_ok() != 1) { fz_fail("P2 merge table not well-founded / TOKLEN-bounded"); }
     if (_decodes_to_text() != 1) { fz_fail("P3 store does not decode to the corpus"); }
     if (_paircnt_exact() != 1) { fz_fail("P4 pair counts drifted from the store"); }
+    if (_rowcache_exact() != 1) { fz_fail("P4 argmax row cache differs from a fresh scan"); }
     # P5
     var o = alloc(len * 8 + 8);
     if (tok_encode(g_text, g_textlen, o, 2) != g_datalen) { fz_fail("P5 u16 re-encode length"); }
@@ -195,10 +213,10 @@ fn fz_round(buf, probe, snap, cur, sz): i64 {
     return 0;
 }
 
-# Run 1500 seeded rounds; exit 0 when every property held.
+# Run FZ_ROUNDS() seeded rounds; exit 0 when every property held.
 fn main(): i64 {
     alloc_init();
-    var rounds = 1500;
+    var rounds = FZ_ROUNDS();
     var buf = alloc(4096);
     var probe = alloc(512);
     var sz = BPE_VMAX() * 8 + BPE_VMAX() * BPE_MAX_TOKLEN();
@@ -209,7 +227,10 @@ fn main(): i64 {
         fz_round(buf, probe, snap, cur, sz);
         g_fz_round = g_fz_round + 1;
     }
-    println("fuzz: 1500 rounds, 8 properties held");
+    var done = " rounds, 8 properties held\n";
+    sys_write(1, "fuzz: ", 6);
+    fz_putn(1, rounds);
+    sys_write(1, done, strlen(done));
     return 0;
 }
 

@@ -91,7 +91,7 @@ fn test_oracle_learn(): i64 {
     test_group("oracle: bpe_learn == 1.1.1 on a corpus matrix");
     # 6 generators x 6 lengths x 3 store widths x 4 merge counts = 432 learns
     var buf = alloc(4096);
-    var bad = 0; var runs = 0;
+    var bad = 0; var runs = 0; var stale = 0;
     var g = 0;
     while (g < 6) {
         var li = 0;
@@ -103,6 +103,7 @@ fn test_oracle_learn(): i64 {
                 while (ki < 4) {
                     _gen(g, buf, len, 1 + 7 * g + 5 * li + 3 * wi + ki);
                     if (ref_learn_matches(buf, len, _w_at(wi), _k_at(ki)) != 1) { bad = bad + 1; }
+                    if (_rowcache_exact() != 1) { stale = stale + 1; }
                     runs = runs + 1;
                     ki = ki + 1;
                 }
@@ -113,6 +114,7 @@ fn test_oracle_learn(): i64 {
         g = g + 1;
     }
     assert_eq(bad, 0, "bpe_learn runs that differ from the 1.1.1 oracle");
+    assert_eq(stale, 0, "learns whose argmax row cache differs from a fresh scan (1.2.0)");
     assert_eq(runs, 432, "oracle matrix ran");
     return 0;
 }
@@ -390,9 +392,10 @@ fn test_bpe_learn(): i64 {
         if (_table_ok() != 1) { bad = bad + 1; }
         if (_decodes_to_text() != 1) { bad = bad + 1; }
         if (_paircnt_exact() != 1) { bad = bad + 1; }
+        if (_rowcache_exact() != 1) { bad = bad + 1; }
         s = s + 1;
     }
-    assert_eq(bad, 0, "well-founded, TOKLEN-bounded, decodes to the corpus, exact pair counts");
+    assert_eq(bad, 0, "well-founded, TOKLEN-bounded, decodes to the corpus, exact counts and row cache");
     return 0;
 }
 

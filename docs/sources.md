@@ -23,6 +23,14 @@ relies on.
   destroys, which new pairs it creates, and how adjacent hits share a pair) is
   derived in the function's comment and in
   [`architecture/001-bpe-pair-counts.md`](architecture/001-bpe-pair-counts.md).
+- **Row-maximum cache for the argmax** (1.2.0, `_bpe_rowscan` / `_bpe_rowfix`)
+  — akshara's own, not taken from a published source. Production BPE trainers
+  usually keep a max-heap of pairs and discard stale entries when they surface
+  (the Hugging Face `tokenizers` trainer does). akshara keeps one cached
+  maximum per row of its fixed V × V count table instead, which needs no
+  per-pair entries and keeps the frozen tie-break a plain ascending scan. Why
+  the cache stays exact under the merge pass is in
+  [`architecture/002-bpe-argmax-row-cache.md`](architecture/002-bpe-argmax-row-cache.md).
 
 ## Test harness (`tests/`)
 

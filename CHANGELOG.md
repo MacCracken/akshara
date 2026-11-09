@@ -4,6 +4,70 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-09
+
+The 1.2.x roadmap: `bpe_learn` is 2.8× faster on the K = 512, 64 KiB
+benchmark, and the fuzz harness now runs on aarch64 in CI. No signature
+changed, and every output is bit-identical to 1.1.1 on x86_64 and aarch64
+([ADR 0001](docs/adr/0001-optimizations-preserve-tokenizer-output.md)).
+
+### Changed
+
+- **`bpe_learn`'s argmax reads a per-row cache**
+  ([architecture 002](docs/architecture/002-bpe-argmax-row-cache.md)). Through
+  1.1.3 it rescanned the whole live V × V pair-count table before every merge,
+  which was 68% of a K = 512 learn on 64 KiB. Now each row's best eligible count
+  and the smallest column holding it are cached. The pick takes the row maxima
+  in ascending row order with strict `>`, which selects exactly the cell 1.1.1's
+  row-major scan selected. After each merge pass, `_bpe_rowfix` revalidates the
+  cache in O(V) and rescans only the rows whose maximum cell the pass lowered.
+  On the benchmark corpus that is 3.2 rows a merge, or about 1.1 M cell reads
+  over the learn where 1.1.3 read 52 M. Measured by running it twice, the
+  argmax now costs about 1.3 ms of the 45 ms learn, where it cost 88 of 129 ms
+  in 1.1.2. The merge pass is byte-identical to 1.1.3's.
+- The cache is a 12 KiB block allocated on the first learn. If the allocator
+  refuses it, `bpe_learn` returns -3 before changing anything, as it does for
+  its other allocations.
+- **Benchmarks** (interleaved A/B: the 1.1.3 and 1.2.0 sources built in one
+  session, alternating processes, median of 5):
+  - `bpe_learn` K = 512 on 64 KiB: 137.4 → 48.3 ms (2.84×);
+  - `bpe_learn` K = 512 on 1 MiB: 815 → 753 ms (−7.6%). The O(n) merge pass
+    dominates from there up, so the 64 MiB cap is essentially unchanged;
+  - `bpe_learn` K = 64 on 64 KiB: +1.2% in the full benchmark binary. A driver
+    that times only this learn measures 12.32 → 11.93 ms (−3.2%);
+  - the other rows run unchanged code, and move between −2.7% and +7.1% from
+    code placement.
+
+  Details are in [`docs/benchmarks.md`](docs/benchmarks.md).
+
+### Added
+
+- **The fuzz harness runs on aarch64 in CI.** Building it with
+  `-D AK_FUZZ_QUICK` runs the first 500 of its 1,500 seeded rounds (about 19 s
+  under qemu); the aarch64 job cross-builds and runs that build. The harness
+  now prints the round count it ran.
+- **A row-cache invariant check.** `tests/props.cyr` `_rowcache_exact`
+  compares the cache with an independent right-to-left scan of the counts. The
+  suite runs it after each of its 432 oracle learns and its six invariant
+  learns (123 assertions), and the fuzz harness's P4 runs it after every
+  round's learn.
+- **The oracle comparison poisons the state the oracle leaves behind.**
+  `ref_learn_matches` ran the 1.1.1 oracle learn first, which left the correct
+  span lengths in the shared `g_tok_len`. A library learn that read a new id's
+  length before writing it therefore passed the fuzz harness (mutation R11).
+  `_ref_poison` now overwrites every span length and the row cache with values
+  that change a merge if read, before the library learn runs.
+- **Mutation run.** All 25 mutants: the 12 new ones aimed at the cache and the
+  13 earlier ones that still apply. The suite kills 24/24 non-equivalent ones,
+  and so does the fuzz harness. M4 survives both, as in 1.1.2, because it is
+  equivalent.
+
+### Verified
+
+- Suite 123/123 on x86_64 and on aarch64 (qemu). Fuzz holds at 1,500 rounds on
+  both, and at 500 with `-D AK_FUZZ_QUICK`. The full 461,435-value golden dump
+  is `cmp`-identical to 1.1.1 on both targets.
+
 ## [1.1.3] - 2026-11-09
 
 A dependency update. No source change.

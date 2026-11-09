@@ -68,6 +68,37 @@ code-placement effects, not as more or less work. The `bench-history.csv`
 1.1.3 row was recorded 35 minutes after the 1.1.2 row, so it also carries
 machine-state drift; this table is the like-for-like comparison.
 
+## 1.1.3 → 1.2.0: the argmax row cache (2026-11-09, interleaved A/B)
+
+Every 1.2.0 output is bit-identical to 1.1.1's. The benchmark was built from the
+1.1.3 and the 1.2.0 source in the same session, and the two binaries were run
+alternately five times each (median):
+
+| Benchmark | 1.1.3 | 1.2.0 | Change |
+|---|---:|---:|---:|
+| `corpus_set` 1 MiB, u16 store | 3.926 ms | 3.820 ms | −2.7% |
+| `bpe_learn` K = 64, 64 KiB | 12.17 ms | 12.32 ms | +1.2% |
+| `bpe_learn` K = 512, 64 KiB | 137.4 ms | 48.30 ms | **2.84×** |
+| `bpe_learn` K = 512, 1 MiB | 815.3 ms | 753.5 ms | −7.6% |
+| `tok_encode` 4 KiB prompt → i64 | 1.882 ms | 1.894 ms | +0.6% |
+| `tok_encode` 1 MiB rebuild → u16 | 538.0 ms | 542.3 ms | +0.8% |
+| `gd_ld` sweep, 1 Mi tokens u16 | 3.969 ms | 4.249 ms | +7.1% |
+| `bpe_build_spans`, 512 merges | 14.9 µs | 15.0 µs | +0.7% |
+
+- **`bpe_learn`** — the argmax reads a cache of each row's maximum
+  ([architecture 002](architecture/002-bpe-argmax-row-cache.md)) instead of
+  scanning the live V × V counts before every merge. Over the K = 512, 64 KiB
+  learn it reads about 1.1 M cells where 1.1.3 read 52 M. Measured by running
+  it twice, the argmax is now about 1.3 ms of that learn. The rest is the O(n)
+  merge pass, unchanged, which is why the 1 MiB row gains only 7.6% and the
+  64 MiB cap is essentially unchanged.
+- **K = 64** has the fewest merges for the cache to save on, and its +1.2% is
+  within the placement noise of this binary. A driver that builds only this
+  learn, alternating the two sources four times, measures 12.32 → 11.93 ms
+  (−3.2%), and 12.27 → 12.02 ms when the code is shifted by a padding function.
+- **Every other row** runs code that did not change, so its movement is code
+  placement.
+
 ## At the 64 MiB loader cap (1.1.2 only, one run)
 
 | Operation | 1.1.2 |

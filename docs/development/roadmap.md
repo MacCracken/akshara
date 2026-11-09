@@ -10,20 +10,6 @@
 > CI job, and before/after rows in `bench-history.csv`. Anything that needs more
 > than that is in the **2.0.0 backlog**.
 
-## 1.2.x — faster BPE learn
-
-- **Per-row maximum cache in `bpe_learn`'s argmax.** The argmax rescans the
-  whole live V × V count table on every merge: 68% of a K = 512 learn on
-  64 KiB (88 of 129 ms, measured by running it twice). Keep each row's best
-  eligible count and its smallest column, rescan only the rows a merge pass
-  touched, and pick the row maximum in ascending row order, so the tie-break is
-  unchanged. Done when the argmax share of that row falls substantially and the
-  new invariant has its own mutation coverage (a stale row, a wrong column on a
-  tie).
-- **Fuzz harness on aarch64 in CI.** Today only the suite runs under qemu; the
-  harness takes about 80 s there at 1,500 rounds. Add a reduced-round aarch64
-  fuzz step (round count as a build flag or an argument).
-
 ## 1.3.x — faster prompt encode
 
 - **Rank-ordered encoder for short inputs.** Applying merges lowest rank

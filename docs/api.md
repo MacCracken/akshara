@@ -72,6 +72,6 @@ path needs only rosnet (`t_alloc`/`t_zero`) + stdlib.
 - **Process-global tokenizer state** (the `g_*` tables above) — one corpus at
   a time, matching the single-threaded execution model; the globals are part
   of the frozen surface because consumer checkpoints serialize them.
-- **Bit-identical across versions and targets**: every output of 1.1.2 equals
+- **Bit-identical across versions and targets**: every output of 1.2.0 equals
   1.1.1's on x86_64 and aarch64 (tests/golden.cyr digests 15 fixed cases; CI
   checks them on both).

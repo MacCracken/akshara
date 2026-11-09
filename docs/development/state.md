@@ -5,6 +5,12 @@
 
 ## Version
 
+**1.2.0** (2026-11-09) — the 1.2.x roadmap. `bpe_learn`'s argmax reads a
+per-row maximum cache ([architecture 002](../architecture/002-bpe-argmax-row-cache.md)),
+so the K = 512, 64 KiB learn is 2.84× faster. The fuzz harness also runs on
+aarch64 in CI (500 rounds). Every output is identical to 1.1.1 on x86_64 and
+aarch64 (the full golden dump). No signature changed.
+
 **1.1.3** (2026-11-09) — rosnet `1.2.2` → `1.4.1`, no source change; every
 output is identical to 1.1.1 on x86_64 and aarch64 (the full golden dump).
 
@@ -42,7 +48,7 @@ Consumers are on the 1.x line: attn11, tentib, prajna and tarka all declare
 
 ## Source
 
-- `src/tok.cyr` (`[lib]`, 666 lines) — the corpus + tokenizer layer: adaptive
+- `src/tok.cyr` (`[lib]`, 731 lines) — the corpus + tokenizer layer: adaptive
   byte vocab, opt-in BPE (Sennrich et al. 2016: learn / encode / decode, pure
   i64, bit-reproducible x86_64 / aarch64), the width-generic packed token store
   (u8 / u16 / i64) + streaming read path, and the checkpoint-facing tokenizer
@@ -59,19 +65,23 @@ Consumers are on the 1.x line: attn11, tentib, prajna and tarka all declare
 
 ## Tests
 
-- `tests/akshara.tcyr` — **122 assertions**, ~6 s on x86_64 (~45 s under qemu
-  aarch64): 15 golden digests recorded from 1.1.1 (`tests/golden.cyr`), the
-  1.1.1 oracle (`tests/reference.cyr`: 432 learns, 111 encodes), and contract /
-  hardening tests for every public fn and error code. `cyrius coverage`: 21/21
-  of `tok.cyr`'s public fns referenced.
+- `tests/akshara.tcyr` — **123 assertions**, ~5 s on x86_64: 15 golden digests
+  recorded from 1.1.1 (`tests/golden.cyr`), the 1.1.1 oracle
+  (`tests/reference.cyr`: 432 learns, 111 encodes; the library learn runs over
+  tables the oracle left poisoned), the argmax row-cache invariant after every
+  oracle learn, and contract / hardening tests for every public fn and error
+  code. `cyrius coverage`: 21/21 of `tok.cyr`'s public fns referenced.
 - `tests/akshara.fcyr` — seeded property fuzzer: 1,500 rounds × 8 properties,
-  ~10 s. Mutation run (1.1.2): suite and fuzzer each kill 13/13 non-equivalent
-  injected bugs.
+  ~9 s; `-D AK_FUZZ_QUICK` builds the first 500 rounds for CI's aarch64 job
+  (~19 s under qemu; the suite takes ~40 s there). Mutation run (1.2.0): suite
+  and fuzzer each kill 24/24 non-equivalent injected bugs, 12 of them aimed at
+  the row cache.
 - `tests/akshara.bcyr` — 8 hot-path benchmarks; history in `bench-history.csv`
   (`scripts/bench-history.sh`), summary in [`docs/benchmarks.md`](../benchmarks.md).
 - Shared helpers: `tests/corpora.cyr`, `tests/hooks.cyr`, `tests/props.cyr`.
 - CI: fmt, lint (hard gate), vet, doc --check, deps --verify / --locked, suite,
-  bench, fuzz, distlib drift, and an aarch64 (cross + qemu) job.
+  bench, fuzz, distlib drift, and an aarch64 (cross + qemu) job running the
+  suite, the smoke and the 500-round fuzz.
 
 ## Dependencies
 
@@ -93,11 +103,12 @@ Transitive (via rosnet; locked in `cyrius.lock`):
 - [tarka](https://github.com/MacCracken/tarka) — intended shared consumer (one
   tokenizer behind SFT/diffusion and RL/reasoning).
 
-## Performance (1.1.3, x86_64, median of 3)
+## Performance (1.2.0, x86_64, median of 3)
 
-`bpe_learn` K = 512: 134 ms / 64 KiB, 798 ms / 1 MiB (45.7 s at the 64 MiB cap,
-measured on 1.1.2). `tok_encode`: 1.82 ms per 4 KiB prompt (512 merges); corpus
-rebuild 526 ms / 1 MiB (31.5 s at the cap, 1.1.2). See
+`bpe_learn` K = 512: 48 ms / 64 KiB, 744 ms / 1 MiB. At the 64 MiB cap it is
+45.7 s (measured on 1.1.2; the O(n) merge pass, which 1.2.0 leaves unchanged,
+dominates there). `tok_encode`: 1.86 ms per 4 KiB prompt (512 merges); corpus
+rebuild 539 ms / 1 MiB (31.5 s at the cap, 1.1.2). See
 [`docs/benchmarks.md`](../benchmarks.md).
 
 ## Next
