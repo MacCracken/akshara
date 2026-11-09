@@ -5,6 +5,9 @@
 
 ## Version
 
+**1.0.4** (2026-11-09) — toolchain + dependency realign to cyrius 6.6.20, no
+source change (see CHANGELOG). The 1.x surface is the one frozen at 1.0.0.
+
 **1.0.0** — **stable, API frozen** (cut 2026-07-05). A clean freeze with no
 behavior change from 0.1.0: what the shipping consumers (attn11 — the origin,
 1066-assertion suite — and tarka) had exercised unchanged since the 2026-06-22
@@ -18,15 +21,14 @@ checkpoints depend on it. Prior: **0.1.0** — extraction from attn11 (M1),
 (via `src/tok.cyr`); third attn11 extraction after `rosnet` (tensors) and `tyche`
 (PRNG).
 
-⚠ **No consumer has moved onto the 1.0.0 tag.** attn11, tentib, prajna and tarka
-all still declare `[deps.akshara] tag = "0.1.0"`. The freeze is real; its
-propagation is not.
+Consumers are on the 1.x line: attn11, tentib, prajna and tarka all declare
+`[deps.akshara] tag = "1.0.2"` (checked 2026-11-09).
 
 ## Toolchain
 
-- **Cyrius pin**: `6.5.27` (in `cyrius.cyml [package].cyrius`)
+- **Cyrius pin**: `6.6.20` (in `cyrius.cyml [package].cyrius`)
 
-**Pin bumped to `6.5.27` 2026-08-17** (ecosystem-wide ML/AI-arc realign, ahead of the arc reopening). `cyrius lib sync --full` re-vendored the whole version-matched stdlib snapshot; suite re-verified green at the new pin.
+**Pin bumped to `6.6.20` 2026-11-09** (from 6.6.2). `cyrius lib sync --full` re-vendored the whole version-matched stdlib snapshot (113 files) and `cyrius.lock` was regenerated from scratch; suite re-verified green at the new pin, smoke green on x86_64 and aarch64 (qemu).
 
 ## Source
 
@@ -38,6 +40,9 @@ propagation is not.
 - `dist/akshara.cyr` — the `cyrius distlib` bundle consumers import. Leaves the
   consumer symbols `puts` / `_putc` / `secure_read_file` / `read_stdin` /
   `file_seek` unresolved (rosnet→tyche pattern).
+  Its sidecar `dist/akshara.deps` lists only the compile-verified stdlib leaves
+  the bundle needs (`io`, emitted as an `include` at the bundle top); consumers
+  declare any other leaf they use.
 - `src/main.cyr` — pure-path smoke (byte vocab + BPE + encode round-trip),
   excluded from the bundle.
 
@@ -55,8 +60,13 @@ propagation is not.
 Direct (declared in `cyrius.cyml`):
 
 - stdlib — string, fmt, alloc, io, vec, str, syscalls, assert, bench, math
-- [`rosnet`](https://github.com/MacCracken/rosnet) 0.2.0 — `t_alloc` / `t_zero`
+- [`rosnet`](https://github.com/MacCracken/rosnet) 1.1.3 — `t_alloc` / `t_zero`
   (the typed bump-allocator the vocab / packed store / BPE tables use)
+
+Transitive (via rosnet; locked in `cyrius.lock`):
+
+- [`tyche`](https://github.com/MacCracken/tyche) 1.1.1 — PRNG for rosnet's
+  `t_randn`; no akshara path uses it
 
 ## Consumers
 

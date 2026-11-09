@@ -4,6 +4,42 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-11-09
+
+A toolchain and dependency realign. No source change.
+
+### Changed
+
+- **Toolchain `6.6.2` → `6.6.20`.** Suite **2/2** unchanged; fmt and lint clean; the
+  smoke binary runs on x86_64 and on aarch64 (under qemu). The x86_64 smoke binary
+  grows from 122,656 to 188,048 B, nearly all of it unreachable stdlib code that DCE
+  would drop (95,382 → 155,977 B unreachable).
+- **`[deps.rosnet]` `1.1.2` → `1.1.3`**, the rosnet release built against 6.6.20. It
+  brings tyche `1.0.1` → `1.1.1` transitively (also 6.6.20-built). akshara uses only
+  `t_alloc` / `t_zero` from rosnet, so tyche 1.1.0's portable-log `rng_normal` change
+  does not reach any akshara path. Vendored `lib/rosnet.cyr` and `lib/tyche.cyr`
+  byte-match the tagged `dist/` bundles.
+- **Vendored `lib/` re-synced** (`cyrius lib sync --full`). It byte-matches the 6.6.20
+  snapshot, 113 files; five are new (`alloc_cx`, `boxed`, `hashseed`, `poison`,
+  `tls_hostid`). This clears the `./lib/ shadows version-pinned` warning (12 bundled
+  libs) that 1.0.3 carried because it bumped the pin without a full re-sync.
+  `lib/agnosys.cyr`, a scaffold-era file in no snapshot from 6.6.2 on, is left as-is.
+- **`cyrius.lock` regenerated from scratch.** One line each for rosnet 1.1.3
+  (`5aa4ad7`) and tyche 1.1.1 (`68bb5db`), 116 file hashes, and the toolchain line
+  the 6.6.20 format records (`cyrius 6.6.20`). `cyrius deps --verify` is clean.
+- **`dist/akshara.deps` lists only what the bundle needs.** From 6.6.18,
+  `cyrius distlib` writes only the stdlib leaves a bundle provably needs
+  (compile-verified) and emits them as `include` lines at the top of the bundle:
+  10 → 1 leaf (`io`). `cyrius distlib --check` passes. The five names it reports
+  undefined (`puts`, `_putc`, `secure_read_file`, `read_stdin`, `file_seek`) are
+  the consumer-supplied I/O hooks, unresolved by design.
+
+  **Consumers:** a build that used `string`, `fmt`, `alloc`, `vec`, `str`,
+  `syscalls`, `assert`, `bench` or `math` only because akshara's sidecar brought it
+  in must now declare that leaf in its own `[deps] stdlib`. All four consumers
+  (attn11, tarka, tentib, prajna) already declare all ten (checked in their
+  manifests 2026-11-09), so none is affected.
+
 ## [1.0.3] - 2026-09-11
 
 ### Changed
