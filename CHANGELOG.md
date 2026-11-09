@@ -4,6 +4,48 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-09
+
+Moves akshara onto the cyrius 6.7 series. No library or API change.
+
+### Changed
+
+- **Toolchain `6.6.20` → `6.7.9`** (through 6.7.0–6.7.8). `src/` is unchanged,
+  and so is every value akshara computes. A dump of 2,192 tokenizer values is
+  byte-identical between 1.0.4 @ 6.6.20 and 1.1.0 @ 6.7.9, on x86_64 and on
+  aarch64 (under qemu). It covers the embedded corpus at byte level (vocab,
+  `g_char2id`, the u8 packed store); BPE on it at the full merge budget (45
+  merges learned, the u16 store, the merge table, every id's span length and
+  bytes); `tok_encode` of the corpus (u16) and of a probe with unseen bytes
+  (i64); and a 512-byte corpus holding all 256 byte values. Suite **2/2**
+  unchanged; fmt, lint, bench and fuzz pass. The smoke binary stays at 188,048 B.
+
+  Upstream changes checked against akshara's source (`src/`, `tests/`):
+  - **6.7.0–6.7.8** reserve `trait`, `const`, `true`, `false`, `do` and `dyn`,
+    and **6.7.3** makes `!` a real operator (before, a lone `!x` compiled as
+    `x`). akshara uses none of them outside comments and strings.
+  - **6.7.9** makes unary `-` and `~` on a constant bind tighter, and
+    **6.7.8–6.7.9** change how typed `*T` pointers step and dereference.
+    akshara writes negatives as `0 - n`, uses no `~`, and has no typed
+    pointers: its tables are untyped addresses read with `load8` / `load16` /
+    `load64`.
+  - **6.7.6** rounds every write into an `f32`. akshara is pure i64.
+  - **6.7.6** deprecates `cyrius tests` (removed in 6.7.12). CI and the docs
+    already use bare `cyrius test`, which still runs the suite.
+- **`[deps.rosnet]` `1.1.3` → `1.2.0`**, the rosnet release built against 6.7.9.
+  It brings tyche `1.1.1` → `1.2.0` transitively. Neither changed source or
+  values; vendored `lib/rosnet.cyr` and `lib/tyche.cyr` byte-match the tagged
+  `dist/` bundles.
+- **Vendored `lib/` re-synced** (`cyrius lib sync --full`). It byte-matches the
+  6.7.9 snapshot: the same 113 files as 6.6.20, 67 of them with new content.
+  Nothing was added or removed.
+- **`cyrius.lock` regenerated from scratch**, as in 1.0.4. One line each for
+  rosnet 1.2.0 (`f065c58`) and tyche 1.2.0 (`2c393fe`), the same 116 file
+  hashes, trailer `cyrius 6.7.9`. `cyrius deps --verify` and 6.7.6's
+  `cyrius deps --locked` are both clean.
+- `dist/akshara.cyr` changes only in its version line, and `dist/akshara.deps`
+  is unchanged (`io`).
+
 ## [1.0.4] - 2026-11-09
 
 A toolchain and dependency realign. No source change.
