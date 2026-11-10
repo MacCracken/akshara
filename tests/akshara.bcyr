@@ -95,6 +95,42 @@ fn bench_gd_ld(): i64 {
     return 0;
 }
 
+# The same sweep through a streamed shard (a memfd) at the real chunk size: each
+# 64 Ki-token chunk is one read plus, since 1.3.1, one vocabulary check. The
+# 1.3.0 -> 1.3.1 difference on this row is that check.
+fn bench_stream(): i64 {
+    var n = 1048576;
+    var fd = sys_memfd_create("akshara-bench", 0);
+    if (fd < 0) { puts("stream bench: memfd failed\n"); return 0; }
+    var img = alloc(n * 2);
+    var i = 0;
+    while (i < n) { store16(img + i * 2, (i * 37) % 768); i = i + 1; }
+    sys_write(fd, img, n * 2);
+    var sv_on = g_bpe_on; var sv_b = g_bpe_base; var sv_k = g_bpe_nmerges; var sv_w = g_data_w;
+    g_bpe_on = 1; g_bpe_base = 256; g_bpe_nmerges = 512;
+    g_stream = 1; g_stream_fd = fd; g_stream_doff = 0;
+    g_data_w = 2; g_datalen = n;
+    g_stream_cap = STREAM_CHUNK();
+    g_stream_buf = alloc(STREAM_CHUNK() * 8);
+    var b = bench_new("stream_tok sweep 1Mi u16");
+    var sink = 0;
+    var it = 0;
+    while (it < 8) {
+        g_stream_lo = 0 - 1; g_stream_clen = 0;
+        bench_start(b);
+        i = 0;
+        while (i < n) { sink = sink + gd_ld(i); i = i + 1; }
+        bench_stop(b);
+        it = it + 1;
+    }
+    bench_report(b);
+    g_stream = 0; g_stream_fd = 0 - 1;
+    g_bpe_on = sv_on; g_bpe_base = sv_b; g_bpe_nmerges = sv_k; g_data_w = sv_w;
+    sys_close(fd);
+    if (sink == 0 - 1) { puts("unreachable\n"); }
+    return 0;
+}
+
 # bpe_build_spans over a learned 512-merge table (checkpoint / shard install).
 fn bench_build_spans(): i64 {
     var n = 65536;
@@ -125,6 +161,7 @@ fn main(): i64 {
     bench_encode("tok_encode 4KiB prompt i64 (512 merges)", 4096, 8, 20);
     bench_encode("tok_encode 1MiB rebuild u16 (512 merges)", 1048576, 2, 3);
     bench_gd_ld();
+    bench_stream();
     bench_build_spans();
     return 0;
 }

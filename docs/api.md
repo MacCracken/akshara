@@ -33,8 +33,8 @@ path needs only rosnet (`t_alloc`/`t_zero`) + stdlib.
 |----|----------|
 | `gd_ld(i)` / `gd_st(i, v)` | load / store token `i` of the store at `g_data_w` (u8 / u16 / i64). `gd_ld` reads through the shard when `g_stream != 0`. **Unchecked**: `i` in `[0, g_datalen)` is the caller's contract (the sampler's hot path). |
 | `g_data` / `g_datalen` / `g_data_w` | the store, its token count, its width (1, 2 or 8; set before `corpus_set`, which refuses others; `bpe_learn` widens 1 to 2) |
-| `stream_tok(i)` | one token from a streamed shard through the single chunk cache. **Fails loud** (stderr, exit 1) on `i` outside `[0, g_datalen)`, an unset cache, a failed seek, or a short read; retries a read interrupted by a signal. |
-| `g_stream`, `g_stream_fd`, `g_stream_doff`, `g_stream_buf`, `g_stream_cap`, `g_stream_lo`, `g_stream_clen` | the streaming state. The **consumer** opens and validates the shard and sets every field (attn11: `src/stream.cyr` `shard_open`). `corpus_set` does not touch them: clear `g_stream` before loading an in-memory corpus. |
+| `stream_tok(i)` | one token from a streamed shard through the single chunk cache. **Fails loud** (stderr, exit 1) on `i` outside `[0, g_datalen)`, an unset cache, a failed seek, a short read, or (since 1.3.1) a chunk holding an id outside the installed vocabulary: `[0, g_bpe_base + g_bpe_nmerges)` under BPE, `[0, g_corpus_vlen)` at byte level. Each chunk is checked once, as it is read, so no id of a bad chunk is returned. Retries a read interrupted by a signal. |
+| `g_stream`, `g_stream_fd`, `g_stream_doff`, `g_stream_buf`, `g_stream_cap`, `g_stream_lo`, `g_stream_clen` | the streaming state. The **consumer** opens and validates the shard, installs its tokenizer, and sets every field (attn11: `src/stream.cyr` `shard_open`). Since 1.3.1 `stream_tok` checks every id against that tokenizer, so install it before the first read. `corpus_set` does not touch them: clear `g_stream` before loading an in-memory corpus. |
 | `STREAM_CHUNK()` | 65,536 tokens per chunk read. |
 
 ## BPE (opt-in; byte level is the default)

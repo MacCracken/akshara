@@ -1,7 +1,7 @@
 # `stream_tok` returns out-of-vocabulary ids unchecked, so a corrupt shard reaches the model as an embedding index
 
-**Status:** 🔴 **OPEN** (proposal).
-**Placement:** unpinned.
+**Status:** ✅ **RESOLVED** in akshara 1.3.1 (see *Resolution* at the end).
+**Placement:** 1.3.1.
 **Discovered:** 2026-11-09, by attn11's 1.15.2 P(-1) audit (three of its four independent reviewers
 found the attn11 side; this is the upstream half).
 **Severity:** Medium for akshara as a library: defense in depth. In attn11 ≤ 1.15.1 it was
@@ -73,3 +73,25 @@ level), should end in `_ak_fatal("akshara: shard token id out of vocabulary -- c
 
 attn11 will keep its own check (`tok_ld`) either way: it also guards the in-memory paths and the
 eval readers.
+
+## Resolution (akshara 1.3.1)
+
+Done as asked. After each chunk read, `stream_tok` checks the whole chunk
+(`_tw_all_below`) against `_ak_vocab()`: `g_bpe_base + g_bpe_nmerges` under BPE
+and `g_corpus_vlen` at byte level. That is the same bound `tok_emit` enforces,
+and for attn11's `shard_open`, which sets both bases to `Vb` and K = 0 at byte
+level, it equals the issue's `g_corpus_vlen + g_bpe_nmerges`. A failing chunk
+ends in `_ak_fatal("akshara: shard token id out of vocabulary -- corrupt shard\n")`
+before any of its ids is returned, including ids of that chunk that are in
+range. At width 8 a negative id fails too. The cache-hit path is unchanged.
+
+The repro now ends in that message with exit 1, on x86_64 and on aarch64
+(qemu). Tests:
+- the suite's `stream_tok: ids outside the vocabulary fail loud` group, which
+  runs each failing read in a forked child and checks its exit code and stderr;
+- fuzz property P9, which streams the learned store from a shard and then a
+  copy with one id overwritten;
+- 11 injected bugs in the check, each caught by both.
+
+Consumers must install the shard's tokenizer before the first read, as
+`shard_open` already does. With no tokenizer installed every chunk fails.

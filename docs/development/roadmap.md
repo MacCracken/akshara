@@ -30,8 +30,9 @@
   O(n + K). Running it on the corpus needs its 12 bytes of scratch per byte
   (768 MiB at the cap) instead of the fixed `ENC_MAX` block.
 - **`stream_tok` returns an error instead of exiting.** It exits on a bad
-  index, a failed seek or a short read because its callers (the training
-  samplers) have no error path today; changing that changes their contract.
+  index, a failed seek, a short read or (since 1.3.1) an id outside the
+  vocabulary, because its callers (the training samplers) have no error path
+  today; changing that changes their contract.
 - **A tokenizer handle instead of process-global `g_*` state.** Today one corpus
   and one tokenizer exist per process, and consumers read and write the globals
   directly and serialize them into checkpoints.

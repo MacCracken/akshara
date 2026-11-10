@@ -26,6 +26,10 @@
 #       and i64 (either encoder path)
 #   P8  corpus_set / tok_encode / tok_emit with random, often invalid, arguments:
 #       the documented error code, and a refused corpus_set keeps the old corpus
+#   P9  every third round: a token shard (the learned store at u16 / i64, or
+#       the corpus at byte level as u8) streams back identically, and with one
+#       overwritten id it fails loud in a forked child exactly when the chunk
+#       read holds an id outside the vocabulary (1.3.1)
 include "lib/rosnet.cyr"
 include "src/tok.cyr"
 include "tests/corpora.cyr"
@@ -262,6 +266,90 @@ fn fz_round(buf, probe, snap, cur, sz): i64 {
     if ((g_datalen != dl) || (g_text != tx) || (g_data != dp)) {
         fz_fail("P8 a refused corpus_set changed the corpus");
     }
+    if ((g_fz_round % 3) == 1) { fz_stream(); }
+    return 0;
+}
+
+# P9 (every third round): a token shard — the learned store at its width, or in
+# half the rounds the corpus at byte level as u8 — with a random header length
+# and chunk cap streams back identically through gd_ld; then, with one id
+# overwritten (often out of the vocabulary), a forked child reading a random
+# token fails loud exactly when the chunk it loads holds an id outside [0, V),
+# and otherwise returns.
+fn fz_stream(): i64 {
+    var n = g_datalen; var w = g_data_w;
+    var V = g_bpe_base + g_bpe_nmerges;
+    if (g_bpe_on == 0) { V = g_corpus_vlen; }
+    var ids = alloc(g_textlen * 8 + n * 8 + 8);
+    var i = 0;
+    while (i < n) { store64(ids + i * 8, gd_ld(i)); i = i + 1; }
+    var bpe = g_bpe_on;
+    if (cp_below(2) == 0) {
+        # half the rounds: the corpus at byte level, as a u8 shard
+        n = g_textlen; w = 1; V = g_corpus_vlen;
+        g_bpe_on = 0;
+        i = 0;
+        while (i < n) {
+            var id = load64(g_char2id + load8(g_text + i) * 8);
+            store64(ids + i * 8, id);
+            i = i + 1;
+        }
+    }
+    var doff = cp_below(33);
+    var cap = 1 + cp_below(80);
+    var fd = _shard_memfd(ids, n, w, doff);
+    if (fd < 0) { fz_fail("P9 shard memfd"); }
+    var sv_w = g_data_w; var sv_n = g_datalen;
+    g_data_w = w; g_datalen = n;
+    g_stream = 1; g_stream_fd = fd; g_stream_doff = doff; g_stream_cap = cap;
+    g_stream_buf = alloc(cap * 8);
+    g_stream_lo = 0 - 1; g_stream_clen = 0;
+    i = 0;
+    while (i < n) {
+        if (gd_ld(i) != load64(ids + i * 8)) { fz_fail("P9 a valid shard streams differently"); }
+        i = i + 1;
+    }
+    var r = 0;
+    while (r < 8) {
+        var k = cp_below(n);
+        if (stream_tok(k) != load64(ids + k * 8)) { fz_fail("P9 a random read differs"); }
+        r = r + 1;
+    }
+    g_stream = 0; g_stream_fd = 0 - 1;
+    g_data_w = sv_w; g_datalen = sv_n;
+    sys_close(fd);
+    # one id overwritten: in range, at V or just past it, or (i64) negative
+    var j = cp_below(n);
+    var kind = cp_below(4);
+    var v = cp_below(V);
+    if (kind == 1) { v = V; }
+    elif (kind == 2) { v = V + cp_below(8); }
+    elif (kind == 3) {
+        v = V + cp_below(65536 - V);
+        if (w == 8) { v = 0 - 1 - cp_below(1000); }
+    }
+    # the value the shard actually holds at its width
+    if (w == 1) { v = v & 255; } elif (w == 2) { v = v & 65535; }
+    store64(ids + j * 8, v);
+    fd = _shard_memfd(ids, n, w, doff);
+    if (fd < 0) { fz_fail("P9 shard memfd"); }
+    var at = cp_below(n);
+    var hi = at + cap;
+    if (hi > n) { hi = n; }
+    var want = 42;
+    i = at;
+    while (i < hi) {
+        var t = load64(ids + i * 8);
+        if ((t < 0) || (t >= V)) { want = 1; }
+        i = i + 1;
+    }
+    var got = _stream_child(fd, doff, w, n, cap, at);
+    sys_close(fd);
+    g_bpe_on = bpe;
+    if (got != want) {
+        if (want == 1) { fz_fail("P9 a chunk with an id outside the vocabulary did not fail loud"); }
+        fz_fail("P9 a chunk of in-vocabulary ids did not stream");
+    }
     return 0;
 }
 
@@ -279,7 +367,7 @@ fn main(): i64 {
         fz_round(buf, probe, snap, cur, sz);
         g_fz_round = g_fz_round + 1;
     }
-    var done = " rounds, 8 properties held\n";
+    var done = " rounds, 9 properties held\n";
     sys_write(1, "fuzz: ", 6);
     fz_putn(1, rounds);
     sys_write(1, done, strlen(done));

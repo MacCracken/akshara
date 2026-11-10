@@ -127,6 +127,24 @@ throughout; the two builds alternated, so both saw the same load.
 - **Every other row** runs unchanged code. These two builds place it so that
   every row is within ±2%, tighter than the 1.2.0 comparison.
 
+## 1.3.0 → 1.3.1: the stream vocabulary check (2026-11-09, interleaved A/B)
+
+1.3.1 checks each chunk `stream_tok` reads against the installed vocabulary.
+Before this release no benchmark streamed, so a driver was built from the 1.3.0
+and 1.3.1 sources: a full `gd_ld` sweep of a 4 Mi-token u16 shard (a memfd) at
+the real 64 Ki-token chunk size, alternating five times (median).
+
+| Benchmark | 1.3.0 | 1.3.1 | Change |
+|---|---:|---:|---:|
+| `stream_tok` sweep, 4 Mi tokens u16 | 48.1 ms | 54.4 ms | +13% |
+
+The difference is the chunk scan: about 1.5 ns a token, paid once per 64 Ki
+tokens read. A training step reads ctx + 1 tokens per window, so the check does
+not show there. A 4-way unrolled scan measured 52.9 ms, saving about a sixth of
+the cost, and was not kept. From 1.3.1 the benchmark file has a
+`stream_tok sweep 1Mi u16` row, the streamed twin of the `gd_ld` sweep, so
+`bench-history.csv` tracks this path.
+
 ## At the 64 MiB loader cap (1.1.2 only, one run)
 
 | Operation | 1.1.2 |

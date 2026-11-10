@@ -4,6 +4,70 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-11-09
+
+A hardening release that closes
+[the `stream_tok` out-of-vocabulary issue](docs/development/issues/2026-11-09-stream-tok-unchecked-ids.md)
+found by attn11's 1.15.2 audit. No signature changed, and every output on a
+valid input is bit-identical to 1.1.1 on x86_64 and aarch64.
+
+### Fixed
+
+- **`stream_tok` checks every chunk against the installed vocabulary**
+  (MEDIUM; defense in depth). Through 1.3.0 it returned whatever u8 / u16 / i64
+  a shard stored. A consumer cannot afford to scan a GB-scale payload at open,
+  so a corrupt or hostile shard handed it ids past its embedding table. In
+  attn11 ≤ 1.15.1 that was an out-of-bounds gradient write; attn11 1.15.2
+  checks downstream.
+  - After each chunk read, the whole chunk is compared with the model
+    vocabulary: `g_bpe_base + g_bpe_nmerges` under BPE, `g_corpus_vlen` at byte
+    level. That is the bound `tok_emit` already enforces, and for attn11's
+    `shard_open` it equals the issue's proposal. At width 8 a negative id fails
+    too.
+  - A chunk holding a bad id ends in
+    `akshara: shard token id out of vocabulary -- corrupt shard` (stderr,
+    exit 1), the existing fail-loud contract, before any of its ids is
+    returned.
+  - The cache-hit path is unchanged.
+  - The issue's repro now exits 1 with that message instead of returning two
+    bad ids.
+- **Consumers must install the shard's tokenizer before the first read.**
+  `docs/api.md` now says so. attn11's `shard_open`, the only consumer that
+  streams, already does. With no tokenizer installed, every chunk fails.
+
+### Added
+
+- **`stream_tok: ids outside the vocabulary fail loud`** in the suite. It
+  covers the issue's repro, the V − 1 / V boundary at u8, u16 and i64, a bad id
+  as a chunk's last id at each width, a negative i64 id, a bad id in a later
+  chunk (earlier chunks stream, any read of its chunk fails, a later chunk
+  streams), and no tokenizer installed. Each
+  read that must fail runs in a forked child, and the test checks both its exit
+  code and its stderr (`tests/props.cyr` `_stream_child`). `test_stream`
+  installs the 768-id vocabulary its ids need. The suite is 161 assertions.
+- **Fuzz property P9**, every third round. A token shard, with a random
+  header length and chunk cap, streams back identically. The shard is the
+  learned store at u16 or i64, or in half the rounds the corpus at byte level
+  as u8.
+  With one id overwritten (in range, at V, just past it, or negative at i64), a
+  forked child fails loud exactly when the chunk it reads holds an id outside
+  the vocabulary.
+- **Mutation run.** 11 mutants of the check, including a dropped check, a V
+  that passes, a skipped first or last id, a wrong BPE vocabulary and the
+  previous window's length. The suite and the fuzz harness each kill all 11.
+  The first run missed three: the fuzz harness never streamed a u8 shard, and
+  the suite never put the bad id at a chunk's end.
+- **A `stream_tok sweep 1Mi u16` benchmark row**, the in-memory `gd_ld`
+  sweep's streamed twin at the real 64 Ki-token chunk size.
+
+### Performance
+
+- A full sweep of a 4 Mi-token u16 shard through `gd_ld` takes 48.1 → 54.4 ms
+  (+13%, about 1.5 ns a token; interleaved A/B of the 1.3.0 and 1.3.1 sources,
+  median of 5). That is the chunk scan, paid once per 64 Ki-token read; a
+  training step reads ctx + 1 tokens per window, so it is invisible there. A
+  4-way unrolled scan saved only a sixth of it and was not kept.
+
 ## [1.3.0] - 2026-11-09
 
 The 1.3.x roadmap: `tok_encode` is 5.35× faster on a 4 KiB prompt. No signature

@@ -5,6 +5,13 @@
 
 ## Version
 
+**1.3.1** (2026-11-09) — hardening. `stream_tok` checks every chunk it reads
+against the installed vocabulary and fails loud on an id outside it, closing
+[the issue](issues/2026-11-09-stream-tok-unchecked-ids.md) attn11's 1.15.2 audit
+filed. Consumers install the shard's tokenizer before streaming (attn11's
+`shard_open` does). No signature changed; every output on a valid input is
+identical to 1.1.1 on x86_64 and aarch64.
+
 **1.3.0** (2026-11-09) — the 1.3.x roadmap. `tok_encode` merges by rank for
 inputs of 2 to `ENC_MAX` bytes ([architecture 003](../architecture/003-rank-ordered-encoder.md)),
 so a 4 KiB prompt encodes 5.35× faster; longer inputs, such as the corpus
@@ -45,8 +52,10 @@ checkpoints depend on it. Prior: **0.1.0** — extraction from attn11 (M1),
 (via `src/tok.cyr`); third attn11 extraction after `rosnet` (tensors) and `tyche`
 (PRNG).
 
-Consumers are on the 1.x line: attn11, tentib, prajna and tarka all declare
-`[deps.akshara] tag = "1.0.2"` (checked 2026-11-09).
+Consumers are on the 1.x line (`[deps.akshara] tag`, checked 2026-11-09):
+attn11 `1.1.3`, tentib `1.2.0`, tarka `1.1.2`, prajna `1.0.2`. Only attn11
+streams shards; its `shard_open` installs the tokenizer before streaming, as
+1.3.1's vocabulary check requires.
 
 ## Toolchain
 
@@ -56,7 +65,7 @@ Consumers are on the 1.x line: attn11, tentib, prajna and tarka all declare
 
 ## Source
 
-- `src/tok.cyr` (`[lib]`, 948 lines) — the corpus + tokenizer layer: adaptive
+- `src/tok.cyr` (`[lib]`, 982 lines) — the corpus + tokenizer layer: adaptive
   byte vocab, opt-in BPE (Sennrich et al. 2016: learn / encode / decode, pure
   i64, bit-reproducible x86_64 / aarch64), the width-generic packed token store
   (u8 / u16 / i64) + streaming read path, and the checkpoint-facing tokenizer
@@ -73,21 +82,23 @@ Consumers are on the 1.x line: attn11, tentib, prajna and tarka all declare
 
 ## Tests
 
-- `tests/akshara.tcyr` — **143 assertions**, ~5 s on x86_64 (~40 s under qemu
+- `tests/akshara.tcyr` — **161 assertions**, ~5 s on x86_64 (~40 s under qemu
   aarch64): 15 golden digests recorded from 1.1.1 (`tests/golden.cyr`), the
   1.1.1 oracle (`tests/reference.cyr`: 432 learns; encodes on both sides of
   `ENC_MAX`, so both encoder paths; the library learn runs over tables the
   oracle left poisoned), the argmax row-cache invariant after every oracle
   learn, the encoder paths' edge cases (runs under self-merges, the `ENC_MAX`
-  boundary, duplicate and not well-founded tables), and contract / hardening
-  tests for every public fn and error code. `cyrius coverage`: 21/21 of
+  boundary, duplicate and not well-founded tables), `stream_tok`'s vocabulary
+  check (each failing read in a forked child, exit code and stderr checked),
+  and contract / hardening tests for every public fn and error code. `cyrius coverage`: 21/21 of
   `tok.cyr`'s public fns referenced.
-- `tests/akshara.fcyr` — seeded property fuzzer: 1,500 rounds × 8 properties,
+- `tests/akshara.fcyr` — seeded property fuzzer: 1,500 rounds × 9 properties,
   ~10 s; `-D AK_FUZZ_QUICK` builds the first 500 rounds for CI's aarch64 job
   (~31 s under qemu). Every 12th round's probe is longer than `ENC_MAX` (the
-  passes); the rest take the rank-ordered encoder. Mutation run (1.3.0): suite
-  and fuzzer each kill 42/42 non-equivalent injected bugs — 18 aimed at the
-  rank encoder, 12 at the row cache.
+  passes); the rest take the rank-ordered encoder; every third round streams a
+  shard (P9). Mutation runs: suite and fuzzer each kill 42/42 non-equivalent
+  injected bugs (1.3.0; 18 aimed at the rank encoder, 12 at the row cache) and
+  11/11 in `stream_tok`'s vocabulary check (1.3.1).
 - `tests/akshara.bcyr` — 8 hot-path benchmarks; history in `bench-history.csv`
   (`scripts/bench-history.sh`), summary in [`docs/benchmarks.md`](../benchmarks.md).
 - Shared helpers: `tests/corpora.cyr`, `tests/hooks.cyr`, `tests/props.cyr`.

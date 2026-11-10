@@ -142,3 +142,61 @@ fn _spans_eq(snap, V): i64 {
     }
     return 1;
 }
+
+# Stream token `at` of the shard on fd (payload at byte doff, n tokens at width
+# w, chunk cap `cap`, fresh cache) in a forked child, against the installed
+# tokenizer, with the child's stderr captured. Returns 1 when stream_tok failed
+# loud with the out-of-vocabulary message, 42 when it returned, 3 when it exited
+# 1 with another message, any other exit code as is, or 100 + the signal that
+# killed it; -1 / -2 when the memfd / fork failed (1.3.1).
+fn _stream_child(fd, doff, w, n, cap, at): i64 {
+    var efd = sys_memfd_create("akshara-stderr", 0);
+    if (efd < 0) { return 0 - 1; }
+    var pid = sys_fork();
+    if (pid < 0) { sys_close(efd); return 0 - 2; }
+    if (pid == 0) {
+        sys_dup2(efd, 2);
+        g_stream = 1; g_stream_fd = fd; g_stream_doff = doff;
+        g_data_w = w; g_datalen = n;
+        g_stream_cap = cap;
+        g_stream_buf = alloc(cap * 8);
+        g_stream_lo = 0 - 1; g_stream_clen = 0;
+        stream_tok(at);
+        sys_exit(42);
+    }
+    var st[8];
+    store64(&st, 0);
+    sys_waitpid(pid, &st, 0);
+    var s = load64(&st) & 65535;
+    var code = 100 + (s & 127);
+    if ((s & 127) == 0) { code = (s >> 8) & 255; }
+    if (code == 1) {
+        var want = "akshara: shard token id out of vocabulary -- corrupt shard\n";
+        var wl = strlen(want);
+        var got[128];
+        sys_lseek(efd, 0, 0);
+        var nr = sys_read(efd, &got, 127);
+        if (nr != wl) { code = 3; }
+        var i = 0;
+        while ((code == 1) && (i < wl)) {
+            if (load8(&got + i) != load8(want + i)) { code = 3; }
+            i = i + 1;
+        }
+    }
+    sys_close(efd);
+    return code;
+}
+
+# Write n ids at width w (from the i64 array ids) to a new memfd after a doff-byte
+# header of 0xFF bytes; returns the fd, or -1.
+fn _shard_memfd(ids, n, w, doff): i64 {
+    var fd = sys_memfd_create("akshara-shard", 0);
+    if (fd < 0) { return 0 - 1; }
+    var img = alloc(doff + n * 8 + 8);
+    var i = 0;
+    while (i < doff) { store8(img + i, 255); i = i + 1; }
+    i = 0;
+    while (i < n) { _tw_st(img + doff, i, w, load64(ids + i * 8)); i = i + 1; }
+    if (sys_write(fd, img, doff + n * w) != doff + n * w) { sys_close(fd); return 0 - 1; }
+    return fd;
+}
