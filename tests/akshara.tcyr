@@ -127,7 +127,7 @@ fn test_oracle_encode(): i64 {
     g_data_w = 2;
     corpus_set(text, 65536);
     bpe_learn(512);
-    var src = alloc(8192);
+    var src = alloc(16384);
     var bad = 0;
     var s = 0;
     while (s < 40) {
@@ -135,6 +135,16 @@ fn test_oracle_encode(): i64 {
         if ((s % 4) == 0) { cp_bytes(src, len, 256, s); } else { cp_text(src, len, 100 + s); }
         if (ref_encode_matches(src, len, 2) != 1) { bad = bad + 1; }
         if (ref_encode_matches(src, len, 8) != 1) { bad = bad + 1; }
+        s = s + 1;
+    }
+    # either side of ENC_MAX: the rank-ordered encoder, then the passes (1.3.0)
+    s = 0;
+    while (s < 4) {
+        var ln = ENC_MAX() - 1 + s;
+        if (s == 3) { ln = 12000; }
+        cp_text(src, ln, 77 + s);
+        if (ref_encode_matches(src, ln, 2) != 1) { bad = bad + 1; }
+        if (ref_encode_matches(src, ln, 8) != 1) { bad = bad + 1; }
         s = s + 1;
     }
     # byte level, every width
@@ -399,6 +409,118 @@ fn test_bpe_learn(): i64 {
     return 0;
 }
 
+# tok_encode's two paths (1.3.0): the rank-ordered encoder (2 .. ENC_MAX bytes,
+# well-founded table) and the per-merge passes (everything else), each against
+# the 1.1.1 oracle, on the inputs where they could part ways.
+fn test_tok_encode_paths(): i64 {
+    test_group("tok_encode: rank-ordered and pass paths (1.3.0)");
+    # runs of a's under self-merges such as (a, a): paired left to right
+    var rc = alloc(4096);
+    cp_runs(rc, 4096, 5);
+    g_data_w = 2;
+    corpus_set(rc, 4096);
+    bpe_learn(64);
+    var self = 0;
+    var m = 0;
+    while (m < g_bpe_nmerges) {
+        if (load64(g_merges + (2 * m) * 8) == load64(g_merges + (2 * m + 1) * 8)) { self = self + 1; }
+        m = m + 1;
+    }
+    assert(self >= 3, "the runs corpus learns self-merges");
+    assert(g_bpe_base + g_bpe_nmerges <= 256, "and a vocab that fits u8");
+    var pr = alloc(ENC_MAX() + 4096);
+    var bad = 0;
+    var s = 0;
+    while (s < 30) {
+        var len = 2 + (s * 37) % 600;
+        cp_runs(pr, len, 40 + s);
+        if (ref_encode_matches(pr, len, 1) != 1) { bad = bad + 1; }
+        if (ref_encode_matches(pr, len, 2) != 1) { bad = bad + 1; }
+        if (ref_encode_matches(pr, len, 8) != 1) { bad = bad + 1; }
+        s = s + 1;
+    }
+    assert_eq(bad, 0, "runs under self-merges encode as 1.1.1, every width");
+    # lengths 1, 2, ENC_MAX - 1, ENC_MAX (rank) and ENC_MAX + 1, + 3000 (passes)
+    bad = 0;
+    s = 0;
+    while (s < 6) {
+        var ln = 1 + s;
+        if (s >= 2) { ln = ENC_MAX() - 3 + s; }
+        if (s == 5) { ln = ENC_MAX() + 3000; }
+        cp_runs(pr, ln, 90 + s);
+        if (ref_encode_matches(pr, ln, 1) != 1) { bad = bad + 1; }
+        if (ref_encode_matches(pr, ln, 2) != 1) { bad = bad + 1; }
+        if (ref_encode_matches(pr, ln, 8) != 1) { bad = bad + 1; }
+        s = s + 1;
+    }
+    assert_eq(bad, 0, "1, 2, ENC_MAX - 1, ENC_MAX, ENC_MAX + 1 and ENC_MAX + 3000 bytes, every width");
+    # u8 refusal on the passes: a 257-id vocab, a text past ENC_MAX
+    var b257 = alloc(514);
+    cp_all256(b257, 512);
+    store8(b257 + 512, load8(b257)); store8(b257 + 513, load8(b257 + 1));
+    corpus_set(b257, 514);
+    assert_eq(bpe_learn(1), 257, "256 bytes + 1 merge = 257 ids");
+    var i = 0;
+    while (i < ENC_MAX() + 100) { store8(pr + i, load8(b257 + (i % 514))); i = i + 1; }
+    var o = alloc((ENC_MAX() + 4096) * 8);
+    assert_eq(tok_encode(pr, ENC_MAX() + 100, o, 1), 0 - 1, "past ENC_MAX at u8, id 256 minted -> -1");
+    assert_eq(tok_encode(pr, ENC_MAX(), o, 1), 0 - 1, "ENC_MAX at u8, id 256 minted -> -1");
+    assert_eq(ref_encode_matches(pr, ENC_MAX() + 100, 2), 1, "the same text at u16 as 1.1.1");
+    # the passes when the only hit is the last pair, every width
+    corpus_set("abab abab", 9);
+    bpe_learn(1);
+    i = 0;
+    while (i < ENC_MAX() + 10) { store8(pr + i, 32); i = i + 1; }
+    store8(pr + ENC_MAX() + 10, 97); store8(pr + ENC_MAX() + 11, 98);
+    assert_eq(tok_encode(pr, ENC_MAX() + 12, o, 2), ENC_MAX() + 11, "a hit only at the last pair, past ENC_MAX");
+    bad = 0;
+    if (ref_encode_matches(pr, ENC_MAX() + 12, 1) != 1) { bad = bad + 1; }
+    if (ref_encode_matches(pr, ENC_MAX() + 12, 2) != 1) { bad = bad + 1; }
+    if (ref_encode_matches(pr, ENC_MAX() + 12, 8) != 1) { bad = bad + 1; }
+    assert_eq(bad, 0, "and as 1.1.1 at every width");
+    # a table with a duplicate merge: the second copy never fires
+    corpus_set("abab abab", 9);
+    bpe_alloc_once();
+    var ia = load64(g_char2id + 97 * 8); var ib = load64(g_char2id + 98 * 8);
+    var B = g_corpus_vlen;
+    g_bpe_on = 1; g_bpe_base = B; g_bpe_nmerges = 3;
+    store64(g_merges, ia); store64(g_merges + 8, ib);
+    store64(g_merges + 16, ia); store64(g_merges + 24, ib);
+    store64(g_merges + 32, B); store64(g_merges + 40, B);
+    assert_eq(bpe_build_spans(), 0, "a duplicate merge is a valid table");
+    assert_eq(tok_encode("abab", 4, o, 8), 1, "abab -> one id");
+    assert_eq(load64(o), B + 2, "abab -> (ab ab), the third merge");
+    bad = 0;
+    if (ref_encode_matches("ababab abab ab", 14, 1) != 1) { bad = bad + 1; }
+    if (ref_encode_matches("ababab abab ab", 14, 2) != 1) { bad = bad + 1; }
+    if (ref_encode_matches("ababab abab ab", 14, 8) != 1) { bad = bad + 1; }
+    assert_eq(bad, 0, "duplicate-merge table encodes as 1.1.1");
+    # a table that is not well-founded, installed without bpe_build_spans: base
+    # 2 under a 3-byte corpus makes 'c' (id 2) look like merge 0's output, and
+    # merge 0 = (a, 2) uses it. One pass leaves aac as (a, 2); merging by rank
+    # would merge again. tok_encode must use the passes.
+    corpus_set("abc", 3);
+    g_bpe_on = 1; g_bpe_base = 2; g_bpe_nmerges = 1;
+    store64(g_merges, 0); store64(g_merges + 8, 2);
+    assert_eq(tok_encode("aac", 3, o, 8), 2, "aac -> 2 ids under a table that is not well-founded");
+    assert_eq(load64(o) * 10 + load64(o + 8), 2, "(a, 2): one pass, not merged twice");
+    assert_eq(ref_encode_matches("aacaac", 6, 8), 1, "as 1.1.1");
+    # a g_char2id entry past 1023 (corpus_set never writes one) takes the passes
+    corpus_set("abab abab", 9);
+    bpe_learn(2);
+    var sv = g_char2id;
+    var c2 = alloc(256 * 8);
+    i = 0;
+    while (i < 256) { store64(c2 + i * 8, load64(sv + i * 8)); i = i + 1; }
+    store64(c2 + 122 * 8, 70000);
+    g_char2id = c2;
+    assert_eq(tok_encode("abzab", 5, o, 8), 3, "abzab -> ab, z, ab");
+    assert_eq(load64(o + 8), 70000, "the id past 1023 comes through whole");
+    assert_eq(ref_encode_matches("abzab abab", 10, 8), 1, "as 1.1.1");
+    g_char2id = sv;
+    return 0;
+}
+
 # bpe_learn refusals: a second learn (-4) and an invalid width (-5) change nothing.
 fn test_bpe_learn_guards(): i64 {
     test_group("bpe_learn: refusals (1.1.2)");
@@ -660,6 +782,7 @@ fn main(): i64 {
     test_build_spans();
     test_tok_encode();
     test_tok_encode_guards();
+    test_tok_encode_paths();
     test_tok_emit();
     test_constants();
     return assert_summary();

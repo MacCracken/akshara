@@ -8,7 +8,7 @@
 # round that reproduces it. Exit 0 = every property held; 1 = a property failed
 # (the message names it, on stderr).
 #
-# Per round, over a random corpus (6 generators, 2..4096 bytes, store width 1 /
+# Per round, over a random corpus (7 generators, 2..4096 bytes, store width 1 /
 # 2 / 8, K in [1, 512]):
 #   P1  bpe_learn == the 1.1.1 oracle (merge table, store, every span)
 #   P2  the learned table is well-founded and BPE_MAX_TOKLEN-bounded
@@ -17,9 +17,13 @@
 #       argmax row cache equals a fresh scan of them (1.2.0)
 #   P5  tok_encode(corpus) reproduces the store, at u16 and i64
 #   P6  tok_encode of a random probe == the oracle, at every legal width; at u8,
-#       refused exactly when the encoding needs an id past 255
-#   P7  a random (often hostile) merge table: bpe_build_spans accepts it iff it
-#       is valid, and a refusal changes no span
+#       refused exactly when the encoding needs an id past 255. Probes are up to
+#       512 bytes (the rank-ordered encoder), and every 12th round's is longer
+#       than ENC_MAX (the per-merge passes)
+#   P7  a random (often hostile) merge table, or one overwritten g_char2id
+#       entry: bpe_build_spans accepts the table iff it is valid, a refusal
+#       changes no span, and tok_encode under it still equals the oracle at u16
+#       and i64 (either encoder path)
 #   P8  corpus_set / tok_encode / tok_emit with random, often invalid, arguments:
 #       the documented error code, and a refused corpus_set keeps the old corpus
 include "lib/rosnet.cyr"
@@ -68,7 +72,22 @@ fn fz_gen(g, buf, len, seed): i64 {
     if (g == 2) { return cp_bytes(buf, len, 5, seed); }
     if (g == 3) { return cp_bytes(buf, len, 256, seed); }
     if (g == 4) { return cp_run(buf, len, 97 + (seed % 26)); }
-    return cp_all256(buf, len);
+    if (g == 5) { return cp_all256(buf, len); }
+    return cp_runs(buf, len, seed);
+}
+
+# P6's u8 rule for probe[0, plen) under the loaded tokenizer: tok_encode at u8
+# is refused exactly when the oracle's i64 encoding holds an id past 255, and
+# otherwise equals the oracle. po is scratch of plen * 8 + 8 bytes.
+fn fz_u8_rule(probe, plen, po): i64 {
+    var hi = 0;
+    var ne = ref_tok_encode(probe, plen, po, 8);
+    var i = 0;
+    while (i < ne) { if (load64(po + i * 8) > 255) { hi = 1; } i = i + 1; }
+    if (hi == 0) {
+        if (ref_encode_matches(probe, plen, 1) != 1) { fz_fail("P6 u8 encode differs from the oracle"); }
+    } elif (tok_encode(probe, plen, po, 1) != 0 - 1) { fz_fail("P6 u8 encode minting an id > 255 not refused"); }
+    return 0;
 }
 
 # 1 if the current merge table is valid (the same rule bpe_build_spans enforces,
@@ -94,7 +113,7 @@ fn fz_table_valid(): i64 {
 # One fuzz round: draw a corpus and arguments from the round seed, check P1-P8.
 fn fz_round(buf, probe, snap, cur, sz): i64 {
     cp_seed(g_fz_round * 7919 + 17);
-    var g = cp_below(6);
+    var g = cp_below(7);
     var len = 2 + cp_below(64);
     if (cp_below(3) == 0) { len = 2 + cp_below(4095); }
     var wsel = cp_below(3);
@@ -120,7 +139,18 @@ fn fz_round(buf, probe, snap, cur, sz): i64 {
     while (i < g_datalen) { if (load64(o + i * 8) != gd_ld(i)) { fz_fail("P5 i64 re-encode ids"); } i = i + 1; }
     # P6: a probe from a different generator (holds unseen bytes and pairs)
     var plen = 1 + cp_below(512);
-    fz_gen(cp_below(6), probe, plen, cp_next());
+    var pg = cp_below(7);
+    var pseed = cp_next();
+    if ((g_fz_round % 12) == 5) {
+        # a long probe: the passes, sometimes right at the ENC_MAX boundary
+        plen = ENC_MAX() + 1 + cp_below(2048);
+        if (cp_below(4) == 0) { plen = ENC_MAX() - 1 + cp_below(3); }
+    }
+    if (((g_fz_round % 24) == 5) && (len >= 2)) {
+        # the corpus itself, repeated: its merges fire, through the passes at u8
+        i = 0;
+        while (i < plen) { store8(probe + i, load8(buf + (i % len))); i = i + 1; }
+    } else { fz_gen(pg, probe, plen, pseed); }
     if (ref_encode_matches(probe, plen, 2) != 1) { fz_fail("P6 u16 encode differs from the oracle"); }
     if (ref_encode_matches(probe, plen, 8) != 1) { fz_fail("P6 i64 encode differs from the oracle"); }
     # u8 over the corpus itself: every learned merge fires on its own corpus, so
@@ -134,21 +164,38 @@ fn fz_round(buf, probe, snap, cur, sz): i64 {
         while (i < nc) { if (load8(o + i) != gd_ld(i)) { fz_fail("P6 u8 re-encode ids"); } i = i + 1; }
     }
     # u8: refused iff the i64 encoding holds an id past 255; otherwise as 1.1.1
-    var hi = 0;
-    var ne = ref_tok_encode(probe, plen, o, 8);
-    i = 0;
-    while (i < ne) { if (load64(o + i * 8) > 255) { hi = 1; } i = i + 1; }
-    if (hi == 0) {
-        if (ref_encode_matches(probe, plen, 1) != 1) { fz_fail("P6 u8 encode differs from the oracle"); }
-    } elif (tok_encode(probe, plen, o, 1) != 0 - 1) { fz_fail("P6 u8 encode minting an id > 255 not refused"); }
+    var po = alloc(plen * 8 + 8);
+    fz_u8_rule(probe, plen, po);
+    if ((g_bpe_base < 256) && (g_bpe_base + g_bpe_nmerges > 257)) {
+        # the u8 boundary through the passes: the table cut to exactly 257 ids
+        # (its last merge mints id 256), over the corpus repeated past ENC_MAX
+        var rl = ENC_MAX() + 1 + cp_below(64);
+        var rp = alloc(rl);
+        var rpo = alloc(rl * 8 + 8);
+        i = 0;
+        while (i < rl) { store8(rp + i, load8(buf + (i % len))); i = i + 1; }
+        var kfull = g_bpe_nmerges;
+        g_bpe_nmerges = 257 - g_bpe_base;
+        fz_u8_rule(rp, rl, rpo);
+        g_bpe_nmerges = kfull;
+    }
     # P7: perturb the table at random, then restore it
     var B0 = g_bpe_base; var K0 = g_bpe_nmerges;
     var save = alloc((2 * BPE_MAX_MERGES()) * 8);
     i = 0;
     while (i < 2 * BPE_MAX_MERGES()) { store64(save + i * 8, load64(g_merges + i * 8)); i = i + 1; }
     _snap_spans(snap);
-    var kind = cp_below(5);
+    var kind = cp_below(7);
+    var c2s = 0; var c2b = cp_below(256);
     if (kind == 0) { g_bpe_base = cp_below(300) - 20; }
+    elif (kind == 5) {
+        # a smaller base under the same merges: in range, rarely well-founded
+        g_bpe_base = 1 + cp_below(B0);
+    } elif (kind == 6) {
+        # one g_char2id entry overwritten with an id a consumer could write
+        c2s = load64(g_char2id + c2b * 8);
+        store64(g_char2id + c2b * 8, cp_below(200000) - 100);
+    }
     elif (kind == 1) { g_bpe_nmerges = cp_below(600) - 40; }
     elif (kind == 2) {
         if (K0 > 0) { store64(g_merges + cp_below(2 * K0) * 8, cp_below(800) - 10); }
@@ -174,18 +221,23 @@ fn fz_round(buf, probe, snap, cur, sz): i64 {
     var rc = bpe_build_spans();
     if ((valid == 1) && (rc != 0)) { fz_fail("P7 a valid table was refused"); }
     if ((valid == 0) && (rc == 0)) { fz_fail("P7 an invalid table was accepted"); }
+    if ((g_bpe_nmerges >= 0) && (g_bpe_nmerges <= BPE_MAX_MERGES())) {
+        if (ref_encode_matches(probe, plen, 2) != 1) { fz_fail("P7 u16 encode under the table != the oracle"); }
+        if (ref_encode_matches(probe, plen, 8) != 1) { fz_fail("P7 i64 encode under the table != the oracle"); }
+    }
     if (valid == 0) {
         _snap_spans(cur);
         if (_bytes_eq(snap, cur, sz) != 1) { fz_fail("P7 a refused table changed a span"); }
     }
     g_bpe_base = B0; g_bpe_nmerges = K0;
+    if (kind == 6) { store64(g_char2id + c2b * 8, c2s); }
     i = 0;
     while (i < 2 * BPE_MAX_MERGES()) { store64(g_merges + i * 8, load64(save + i * 8)); i = i + 1; }
     if (bpe_build_spans() != 0) { fz_fail("P7 restoring the learned table failed"); }
     if (_spans_eq(snap, B0 + K0) != 1) { fz_fail("P7 restored spans differ"); }
     # P8: invalid arguments
     var ow = cp_below(11) - 1;
-    var er = tok_encode(probe, plen, o, ow);
+    var er = tok_encode(probe, plen, po, ow);
     if ((ow != 1) && (ow != 2) && (ow != 8)) { if (er != 0 - 1) { fz_fail("P8 invalid ow not refused"); } }
     var id = cp_below(1100) - 50;
     if ((id < 0) || (id >= g_bpe_base + g_bpe_nmerges)) {
@@ -218,7 +270,7 @@ fn main(): i64 {
     alloc_init();
     var rounds = FZ_ROUNDS();
     var buf = alloc(4096);
-    var probe = alloc(512);
+    var probe = alloc(ENC_MAX() + 2048);
     var sz = BPE_VMAX() * 8 + BPE_VMAX() * BPE_MAX_TOKLEN();
     var snap = alloc(sz);
     var cur = alloc(sz);

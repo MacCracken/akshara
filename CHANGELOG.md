@@ -4,6 +4,88 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-09
+
+The 1.3.x roadmap: `tok_encode` is 5.35× faster on a 4 KiB prompt. No signature
+changed, and every output is bit-identical to 1.1.1 on x86_64 and aarch64
+([ADR 0001](docs/adr/0001-optimizations-preserve-tokenizer-output.md)).
+
+### Changed
+
+- **`tok_encode` merges by rank for inputs of 2 to `ENC_MAX` (8,192) bytes**
+  ([architecture 003](docs/architecture/003-rank-ordered-encoder.md)).
+  Through 1.2.0 every encode ran one pass over the input per learned merge.
+  When every merge is well-founded (it uses only ids that exist before it),
+  merging every occurrence of the lowest-rank pair present, rank by rank,
+  gives the same ids: a pass creates only pairs that hold its new id, and
+  every merge using that id ranks higher. The new path files each node of a
+  linked list over the input under its pair's rank and drains the ranks in
+  order, pairing each run of `a`s under an `(a, a)` merge left to right. That
+  is O(n + K) instead of O(n × K).
+  - Longer inputs, which includes the corpus rebuild, still run the passes.
+  - So do tables the rank path cannot reproduce: a merge that is not
+    well-founded (possible only when a table is installed without
+    `bpe_build_spans`), a base outside [1, 256], or a `g_char2id` id past 1023.
+  - If its scratch allocation is refused, it uses the passes rather than
+    failing.
+  - The u8 refusal is the same on both paths.
+- **The scratch is about 113 KiB**, allocated on the first BPE encode and kept
+  for the process lifetime, so the prompt path still allocates nothing per
+  call. It holds u16 node and bucket links, plus a rank hash that is rebuilt
+  from `g_merges` on every call.
+- **Benchmarks** (interleaved A/B: the 1.2.0 and 1.3.0 sources built in one
+  session, alternating processes, median of 7):
+  - `tok_encode` 4 KiB prompt → i64, 512 merges: 2.023 → 0.378 ms (5.35×);
+  - the 1 MiB corpus rebuild runs the passes and is unchanged (−0.1%);
+  - every other row runs unchanged code and is within ±2%.
+
+### Added
+
+- **Tests for both encoder paths.** The suite's oracle matrix now also encodes
+  8,191, 8,192, 8,193 and 12,000 bytes. A new group covers:
+  - runs under self-merges at every width;
+  - the lengths 1, 2, `ENC_MAX` − 1, `ENC_MAX`, `ENC_MAX` + 1 and
+    `ENC_MAX` + 3000;
+  - the u8 refusal past `ENC_MAX`, and a pass whose only hit is the last pair;
+  - a duplicate-merge table;
+  - a table that is not well-founded, which the rank path would encode
+    differently;
+  - a `g_char2id` id past 1023.
+
+  The suite is 143 assertions.
+- **`tests/corpora.cyr` `cp_runs`**, a generator of runs of `a`s that makes
+  BPE learn self-merges. It is the suite's runs corpus and the fuzz harness's
+  seventh generator.
+- **The fuzz harness covers both paths.**
+  - Every 12th round's probe is longer than `ENC_MAX`, sometimes exactly at the
+    boundary, and some of those repeat the corpus so its merges fire through
+    the passes.
+  - P7 compares `tok_encode` with the oracle under each hostile table. It has
+    two new kinds of hostile state: a base that shrinks but stays in range,
+    and an overwritten `g_char2id` entry.
+  - Every round whose vocab passes 257 ids checks the u8 boundary on the
+    passes, under the table cut to exactly 257 ids.
+  - 1,500 rounds take about 10 s on x86_64. The 500-round quick build takes
+    31 s under qemu.
+- **Mutation run.** There are 43 mutants: the 18 new ones aimed at the rank
+  encoder (listed in architecture 003) and the 25 from 1.2.0. The suite and
+  the fuzz harness each kill all 42 that are not equivalent; M4 is equivalent,
+  as before.
+
+### Fixed
+
+- **The fuzz harness wrote past a buffer** (test code only, since 1.1.2). P6's
+  u8 check and P8's invalid-width call encoded the probe (up to 512 tokens at
+  8 bytes) into the buffer sized for the corpus, which can be 24 bytes. It
+  overran the bump arena harmlessly, since nothing still in use came after it.
+  The probe now has its own buffer.
+
+### Verified
+
+- Suite 143/143 on x86_64 and on aarch64 (qemu). Fuzz holds at 1,500 rounds on
+  both, and at 500 with `-D AK_FUZZ_QUICK`. The full 461,435-value golden dump
+  is `cmp`-identical to 1.1.1 on both targets.
+
 ## [1.2.0] - 2026-11-09
 
 The 1.2.x roadmap: `bpe_learn` is 2.8× faster on the K = 512, 64 KiB

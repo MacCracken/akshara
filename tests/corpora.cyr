@@ -126,6 +126,28 @@ fn cp_run(buf, len, b): i64 {
     return len;
 }
 
+# Fill buf[0, len) with runs of 'a' (1 to 24 long) between short separators
+# ("b", " ", "ab" or "ba"), from seed: the corpus that makes BPE learn self-merges
+# like (a, a) and (aa, aa), whose overlapping runs the encoders must pair up left
+# to right (1.3.0).
+fn cp_runs(buf, len, seed): i64 {
+    cp_seed(seed);
+    var i = 0;
+    while (i < len) {
+        var k = 1 + cp_below(24);
+        while ((k > 0) && (i < len)) { store8(buf + i, 97); i = i + 1; k = k - 1; }
+        # separator: 0 "b", 1 " ", 2 "ab", 3 "ba"
+        var sep = cp_below(4);
+        var s1 = 98; var s2 = 0 - 1;
+        if (sep == 1) { s1 = 32; }
+        elif (sep == 2) { s1 = 97; s2 = 98; }
+        elif (sep == 3) { s2 = 97; }
+        if (i < len) { store8(buf + i, s1); i = i + 1; }
+        if ((s2 >= 0) && (i < len)) { store8(buf + i, s2); i = i + 1; }
+    }
+    return len;
+}
+
 # Fill buf[0, len) with all 256 byte values in a scrambled but fixed order
 # (37 is odd, so i*37 mod 256 visits every value once per 256 bytes).
 fn cp_all256(buf, len): i64 {

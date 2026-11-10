@@ -31,6 +31,14 @@ relies on.
   per-pair entries and keeps the frozen tie-break a plain ascending scan. Why
   the cache stays exact under the merge pass is in
   [`architecture/002-bpe-argmax-row-cache.md`](architecture/002-bpe-argmax-row-cache.md).
+- **Rank-ordered BPE encoding** (1.3.0, `_enc_ranked`) — the encode order of
+  OpenAI's GPT-2 tokenizer (`src/encoder.py`, `Encoder.bpe`, in
+  [openai/gpt-2](https://github.com/openai/gpt-2)), which repeatedly takes the
+  lowest-ranked pair present and merges all of its occurrences left to right.
+  akshara files each pair under its rank in a bucket instead of searching for
+  the minimum at every step. Why this reproduces the pass-per-merge encoding,
+  and the tables for which it does not, is in
+  [`architecture/003-rank-ordered-encoder.md`](architecture/003-rank-ordered-encoder.md).
 
 ## Test harness (`tests/`)
 

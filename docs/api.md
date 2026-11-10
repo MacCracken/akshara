@@ -57,7 +57,7 @@ path needs only rosnet (`t_alloc`/`t_zero`) + stdlib.
 
 | fn | contract |
 |----|----------|
-| `tok_encode(text, len, out, ow)` → n | Encode `len` bytes into `out` (≥ `len * ow` bytes) at width `ow`: unseen bytes → id 0, then every merge in order. Encoding the corpus bytes reproduces the store bit for bit. `n ≤ len`. Returns **-1** when `ow` is not 1, 2 or 8, no tokenizer is loaded, or `ow = 1` and a merge minting an id past 255 applies to the text (a u8 cannot hold it; 1.1.1 truncated it). At `ow = 1` any text whose encoding stays below 256 ids encodes as before. |
+| `tok_encode(text, len, out, ow)` → n | Encode `len` bytes into `out` (≥ `len * ow` bytes) at width `ow`: unseen bytes → id 0, then every merge in order. Encoding the corpus bytes reproduces the store bit for bit. `n ≤ len`. Returns **-1** when `ow` is not 1, 2 or 8, no tokenizer is loaded, or `ow = 1` and a merge minting an id past 255 applies to the text (a u8 cannot hold it; 1.1.1 truncated it). At `ow = 1` any text whose encoding stays below 256 ids encodes as before. Since 1.3.0 an input of 2 to `ENC_MAX` bytes runs an O(n + K) rank-ordered encoder with the same output ([architecture 003](architecture/003-rank-ordered-encoder.md)); longer inputs, and tables it cannot reproduce, run the per-merge passes. |
 | `tok_emit(id)` → 0 / -1 | Emit one id's bytes: byte level through the consumer's `_putc`, BPE through `print`. **-1** (nothing emitted) for `id < 0`, `id ≥ 256` at byte level, or `id ≥ g_bpe_base + g_bpe_nmerges` under BPE. |
 | `decode_char(id)` | base id → byte value. **Unchecked**: `id` in `[0, 256)` (and `< g_bpe_base` under BPE). |
 
@@ -72,6 +72,6 @@ path needs only rosnet (`t_alloc`/`t_zero`) + stdlib.
 - **Process-global tokenizer state** (the `g_*` tables above) — one corpus at
   a time, matching the single-threaded execution model; the globals are part
   of the frozen surface because consumer checkpoints serialize them.
-- **Bit-identical across versions and targets**: every output of 1.2.0 equals
+- **Bit-identical across versions and targets**: every output of 1.3.0 equals
   1.1.1's on x86_64 and aarch64 (tests/golden.cyr digests 15 fixed cases; CI
   checks them on both).

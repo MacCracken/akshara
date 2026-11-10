@@ -99,6 +99,34 @@ alternately five times each (median):
 - **Every other row** runs code that did not change, so its movement is code
   placement.
 
+## 1.2.0 → 1.3.0: the rank-ordered encoder (2026-11-09, interleaved A/B)
+
+Every 1.3.0 output is bit-identical to 1.1.1's. The benchmark was built from the
+1.2.0 and the 1.3.0 source in the same session, and the two binaries were run
+alternately seven times each (median). Other jobs were running on the host
+throughout; the two builds alternated, so both saw the same load.
+
+| Benchmark | 1.2.0 | 1.3.0 | Change |
+|---|---:|---:|---:|
+| `corpus_set` 1 MiB, u16 store | 4.174 ms | 4.161 ms | −0.3% |
+| `bpe_learn` K = 64, 64 KiB | 13.21 ms | 13.16 ms | −0.4% |
+| `bpe_learn` K = 512, 64 KiB | 52.92 ms | 51.93 ms | −1.9% |
+| `bpe_learn` K = 512, 1 MiB | 809.9 ms | 808.3 ms | −0.2% |
+| `tok_encode` 4 KiB prompt → i64 | 2.023 ms | 0.378 ms | **5.35×** |
+| `tok_encode` 1 MiB rebuild → u16 | 582.0 ms | 581.3 ms | −0.1% |
+| `gd_ld` sweep, 1 Mi tokens u16 | 4.533 ms | 4.538 ms | +0.1% |
+| `bpe_build_spans`, 512 merges | 16.1 µs | 16.0 µs | −0.5% |
+
+- **`tok_encode` 4 KiB prompt** — the input fits `ENC_MAX`, so it runs the
+  rank-ordered encoder ([architecture 003](architecture/003-rank-ordered-encoder.md)):
+  one pass to file every pair under its rank, then a constant number of list
+  and bucket updates per merge performed, instead of 512 passes over the
+  prompt. The seven 1.3.0 runs fall between 367 and 384 µs.
+- **The 1 MiB rebuild** is longer than `ENC_MAX` and runs the same passes as
+  1.2.0.
+- **Every other row** runs unchanged code. These two builds place it so that
+  every row is within ±2%, tighter than the 1.2.0 comparison.
+
 ## At the 64 MiB loader cap (1.1.2 only, one run)
 
 | Operation | 1.1.2 |

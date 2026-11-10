@@ -10,16 +10,6 @@
 > CI job, and before/after rows in `bench-history.csv`. Anything that needs more
 > than that is in the **2.0.0 backlog**.
 
-## 1.3.x — faster prompt encode
-
-- **Rank-ordered encoder for short inputs.** Applying merges lowest rank
-  first, leftmost on ties, reproduces the pass-per-merge output exactly (the
-  1.1.2 audit has the argument). It needs a linked list over the input. Allocate
-  that once at `ENC_MAX` (8,192 ids), so the prompt path still allocates nothing
-  per call, and keep the per-merge passes for longer inputs such as the corpus
-  rebuild. Done when the 4 KiB prompt row improves and the oracle and fuzz
-  comparisons cover both paths at every width.
-
 ## 1.x.x — standing work
 
 - **Toolchain and dependency realigns** as patch releases whenever the cyrius
@@ -34,7 +24,11 @@
   `bpe_learn` takes 45.7 s and the corpus rebuild 31.5 s, because each merge
   rewrites the whole store. A per-pair position index removes that pass but
   costs several bytes per token (gigabytes at the cap), breaking the
-  fixed-allocation budget consumers size for.
+  fixed-allocation budget consumers size for. The rebuild half already exists
+  for short inputs: 1.3.0's rank-ordered encoder
+  ([architecture 003](../architecture/003-rank-ordered-encoder.md)) is
+  O(n + K). Running it on the corpus needs its 12 bytes of scratch per byte
+  (768 MiB at the cap) instead of the fixed `ENC_MAX` block.
 - **`stream_tok` returns an error instead of exiting.** It exits on a bad
   index, a failed seek or a short read because its callers (the training
   samplers) have no error path today; changing that changes their contract.
