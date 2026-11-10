@@ -104,7 +104,9 @@ streams shards; its `shard_open` installs the tokenizer before streaming, as
 - Shared helpers: `tests/corpora.cyr`, `tests/hooks.cyr`, `tests/props.cyr`.
 - CI: fmt, lint (hard gate), vet, doc --check, deps --verify / --locked, suite,
   bench, fuzz, distlib drift, and an aarch64 (cross + qemu) job running the
-  suite, the smoke and the 500-round fuzz.
+  suite, the smoke and the 500-round fuzz. Third-party actions are pinned by
+  commit SHA: actions/checkout v7.0.1, softprops/action-gh-release v3.0.4
+  (rosnet and tyche: v3.0.3).
 
 ## Dependencies
 

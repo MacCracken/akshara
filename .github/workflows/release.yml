@@ -87,8 +87,9 @@ jobs:
           [ -s /tmp/body.md ] || echo "No changelog entry for ${GITHUB_REF_NAME}." > /tmp/body.md
 
       # The one step that uses the write token, so a moved tag here could rewrite
-      # what a release ships: pinned to a full commit SHA.
-      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+      # what a release ships: pinned to a full commit SHA (the tag's ^{} commit,
+      # checked with git ls-remote).
+      - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           name: "akshara ${{ github.ref_name }}"
           body_path: /tmp/body.md

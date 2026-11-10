@@ -4,6 +4,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **CI: softprops/action-gh-release v3.0.3 → v3.0.4** in `release.yml`,
+  pinned by commit SHA to `8a0cd651e5b2365bd640854a3fa5dfc70e4875f3` (the
+  tag's commit, checked with `git ls-remote`). v3.0.4 is a maintenance release:
+  13 dependency bumps and the release commit, with `action.yml` byte-identical
+  (same inputs, `node24` runtime). The 1.1.2 audit had kept v3.0.3 for parity
+  with rosnet and tyche. akshara now moves ahead of them, and they still pin
+  v3.0.3. CI only, so no library change and no version bump.
+
 ## [1.3.1] - 2026-11-09
 
 A hardening release that closes

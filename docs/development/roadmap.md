@@ -15,8 +15,10 @@
 - **Toolchain and dependency realigns** as patch releases whenever the cyrius
   pin moves. The pin, `lib/` (`cyrius lib sync --full`) and `cyrius.lock`
   (regenerated from scratch) change in one commit.
-- **CI action pins.** Move softprops/action-gh-release from v3.0.3 to the
-  current release, by commit SHA, in step with rosnet and tyche.
+- **CI action pins.** Keep third-party actions on their current releases,
+  pinned by commit SHA (the tag's `^{}` commit from `git ls-remote`). akshara
+  moved softprops/action-gh-release to v3.0.4 ahead of rosnet and tyche, which
+  still pin v3.0.3, and they follow when they are next touched.
 
 ## 2.0.0 backlog — needs a semantics or surface change
 
